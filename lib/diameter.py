@@ -257,6 +257,11 @@ class Diameter:
             return (binform)
 
     def TBCD_encode(self, input):
+        if input is None:
+            return ""
+        input = str(input)
+        if input.lower() == "none":
+            return ""
         self.logTool.log(service='HSS', level='debug', message="TBCD_encode input value is " + str(input), redisClient=self.redisMessaging)
         offset = 0
         output = ''
@@ -2124,8 +2129,13 @@ class Diameter:
         subscription_data += self.generate_vendor_avp(1429, "c0", 10415, APN_Configuration_Profile + APN_Configuration)
 
         try:
-            self.logTool.log(service='HSS', level='debug', message="MSISDN is " + str(subscriber_details['msisdn']) + " - adding in ULA", redisClient=self.redisMessaging)
-            msisdn_avp = self.generate_vendor_avp(701, 'c0', 10415, self.TBCD_encode(str(subscriber_details['msisdn'])))                     #MSISDN
+            msisdn = subscriber_details.get('msisdn')
+            if msisdn is None or msisdn == "":
+                self.logTool.log(service='HSS', level='warning', message="MSISDN missing for subscriber " + str(imsi) + " - using IMSI as fallback", redisClient=self.redisMessaging)
+                msisdn = str(imsi)
+            
+            self.logTool.log(service='HSS', level='debug', message="MSISDN is " + str(msisdn) + " - adding in ULA", redisClient=self.redisMessaging)
+            msisdn_avp = self.generate_vendor_avp(701, 'c0', 10415, self.TBCD_encode(str(msisdn)))                     #MSISDN
             self.logTool.log(service='HSS', level='debug', message=msisdn_avp, redisClient=self.redisMessaging)
             subscription_data += msisdn_avp
         except Exception as E:
@@ -4687,11 +4697,18 @@ class Diameter:
         #     self.generate_vendor_avp(1428, "c0", 10415, self.int_to_hex(0, 4)) + APN_Configuration)
 
         #If MSISDN is present include it in Subscription Data
-        if 'msisdn' in subscriber_details:
-            self.logTool.log(service='HSS', level='debug', message="MSISDN is " + str(subscriber_details['msisdn']) + " - adding in IDR", redisClient=self.redisMessaging)
-            msisdn_avp = self.generate_vendor_avp(701, 'c0', 10415, self.string_to_hex(str(subscriber_details['msisdn'])))                     #MSISDN
+        try:
+            msisdn = subscriber_details.get('msisdn')
+            if msisdn is None or msisdn == "":
+                self.logTool.log(service='HSS', level='warning', message="MSISDN missing for subscriber " + str(imsi) + " - using IMSI as fallback", redisClient=self.redisMessaging)
+                msisdn = str(imsi)
+            
+            self.logTool.log(service='HSS', level='debug', message="MSISDN is " + str(msisdn) + " - adding in IDR", redisClient=self.redisMessaging)
+            msisdn_avp = self.generate_vendor_avp(701, 'c0', 10415, self.TBCD_encode(str(msisdn)))                     #MSISDN
             self.logTool.log(service='HSS', level='debug', message=msisdn_avp, redisClient=self.redisMessaging)
             subscription_data += msisdn_avp
+        except Exception as E:
+            self.logTool.log(service='HSS', level='error', message="Failed to populate MSISDN in IDR due to error " + str(E), redisClient=self.redisMessaging)
 
         if 'RAT_freq_priorityID' in subscriber_details:
             self.logTool.log(service='HSS', level='debug', message="RAT_freq_priorityID is " + str(subscriber_details['RAT_freq_priorityID']) + " - Adding in IDR", redisClient=self.redisMessaging)

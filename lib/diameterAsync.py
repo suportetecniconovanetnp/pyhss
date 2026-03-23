@@ -256,7 +256,7 @@ class DiameterAsync:
 
     async def getPeerType(self, originHost: str) -> str:
             try:
-                peerTypes = ['mme', 'pgw', 'pcscf', 'icscf', 'scscf', 'hss', 'ocs', 'dra']
+                peerTypes = ['mme', 'pgw', 'pcscf', 'icscf', 'scscf', 'hss', 'ocs', 'dra', 'smf', 'amf']
 
                 for peer in peerTypes:
                     if peer in originHost.lower():
@@ -268,7 +268,7 @@ class DiameterAsync:
     async def getConnectedPeersByType(self, peerType: str) -> list:
             try:
                 peerType = peerType.lower()
-                peerTypes = ['mme', 'pgw', 'pcscf', 'icscf', 'scscf', 'hss', 'ocs', 'dra']
+                peerTypes = ['mme', 'pgw', 'pcscf', 'icscf', 'scscf', 'hss', 'ocs', 'dra', 'smf', 'amf']
 
                 if peerType not in peerTypes:
                     return []
@@ -276,7 +276,7 @@ class DiameterAsync:
                 activePeers = await(self.redisMessaging.getValue(key="ActiveDiameterPeers", usePrefix=True, prefixHostname=self.hostname, prefixServiceName='diameter'))
 
                 for key, value in activePeers.items():
-                    if activePeers.get(key, {}).get('peerType', '') == 'pgw' and activePeers.get(key, {}).get('connectionStatus', '') == 'connected':
+                    if activePeers.get(key, {}).get('peerType', '') == peerType and activePeers.get(key, {}).get('connectionStatus', '') == 'connected':
                         filteredConnectedPeers.append(activePeers.get(key, {}))
                 
                 return filteredConnectedPeers

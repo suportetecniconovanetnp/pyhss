@@ -737,7 +737,7 @@ class Diameter:
         
     def getPeerType(self, originHost: str) -> str:
         try:
-            peerTypes = ['mme', 'pgw', 'pcscf', 'icscf', 'scscf', 'hss', 'ocs', 'dra']
+            peerTypes = ['mme', 'pgw', 'pcscf', 'icscf', 'scscf', 'hss', 'ocs', 'dra', 'smf', 'amf']
 
             for peer in peerTypes:
                 if peer in originHost.lower():
@@ -832,7 +832,7 @@ class Diameter:
     def getConnectedPeersByType(self, peerType: str) -> list:
         try:
             requestedPeerType = peerType.lower()
-            peerTypes = ['mme', 'pgw', 'pcscf', 'icscf', 'scscf', 'hss', 'ocs', 'dra']
+            peerTypes = ['mme', 'pgw', 'pcscf', 'icscf', 'scscf', 'hss', 'ocs', 'dra', 'smf', 'amf']
             filteredConnectedPeers = []
 
             if requestedPeerType not in peerTypes:

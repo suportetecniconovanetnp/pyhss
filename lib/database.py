@@ -1024,6 +1024,19 @@ class Database:
                         result[keys] = str(result[keys])
         return result
 
+    def _coerce_model_value(self, obj_type, key, value):
+        column = obj_type.__table__.columns.get(key)
+        if column is None or value is None:
+            return value
+
+        if isinstance(column.type, DateTime) and isinstance(value, str):
+            try:
+                return datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+            except ValueError:
+                return value
+
+        return value
+
     def Sanitize_Keys(self, result):
         names_to_strip = ['opc', 'ki', 'des', 'kid', 'psk', 'adm1']
         for name_to_strip in names_to_strip:
@@ -1178,7 +1191,7 @@ class Database:
             obj = session.query(obj_type).filter(filter_input).one()
             for key, value in json_data.items():
                 if hasattr(obj, key):
-                    setattr(obj, key, value)
+                    setattr(obj, key, self._coerce_model_value(obj_type, key, value))
                     setattr(obj, "last_modified", datetime.datetime.now(tz=datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S') + 'Z')
         except Exception as E:
             self.logTool.log(service='Database', level='error', message=f"Failed to query or update object, error: {E}", redisClient=self.redisMessaging)

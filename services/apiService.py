@@ -367,6 +367,62 @@ def send_clr_and_log_result(imsi, serving_mme, serving_mme_realm, serving_mme_pe
         )
         return diameter_response, None
 
+
+def send_isd_and_log_result(imsi, serving_mme, serving_mme_realm, serving_mme_peer, context, timeout=1.0):
+    logTool.log(
+        service='API',
+        level='info',
+        message=(
+            f"[API] [{context}] ISD routing details for IMSI {imsi}: "
+            f"serving_mme={serving_mme}, serving_mme_realm={serving_mme_realm}, "
+            f"serving_mme_peer={serving_mme_peer}"
+        ),
+        redisClient=redisMessaging,
+    )
+
+    diameter_response = diameterClient.awaitDiameterRequestAndResponse(
+        requestType='ISD',
+        hostname=serving_mme_peer,
+        imsi=imsi,
+        DestinationHost=serving_mme,
+        DestinationRealm=serving_mme_realm,
+        timeout=timeout,
+    )
+
+    if not diameter_response:
+        logTool.log(
+            service='API',
+            level='warning',
+            message=f"[API] [{context}] ISD timed out waiting for ISA from peer {serving_mme_peer} for IMSI {imsi}",
+            redisClient=redisMessaging,
+        )
+        return '', None
+
+    try:
+        isa_packet_vars, isa_avps = diameterClient.decode_diameter_packet(diameter_response)
+        isa_result_code = int(diameterClient.get_avp_data(isa_avps, 268)[0], 16)
+        logTool.log(
+            service='API',
+            level='info',
+            message=(
+                f"[API] [{context}] Received ISA from peer {serving_mme_peer} for IMSI {imsi}: "
+                f"result_code={isa_result_code}, packet_vars={isa_packet_vars}"
+            ),
+            redisClient=redisMessaging,
+        )
+        return diameter_response, isa_result_code
+    except Exception:
+        logTool.log(
+            service='API',
+            level='warning',
+            message=(
+                f"[API] [{context}] Received ISD response from peer {serving_mme_peer} for IMSI {imsi}, "
+                f"but failed to decode ISA: {traceback.format_exc()}"
+            ),
+            redisClient=redisMessaging,
+        )
+        return diameter_response, None
+
 apiService.before_request(auth_before_request)
 
 @apiService.errorhandler(404)
@@ -669,34 +725,75 @@ class PyHSS_SUBSCRIBER_Get(Resource):
                 except Exception as e:
                     print("Error sending CLR: " + str(e))
 
-            #Check if QoS/Speed has changed and trigger ISD if attached
-            qos_changed = False
-            for key in ['ue_ambr_ul', 'ue_ambr_dl', 'apn_list']:
+            ambr_changed = False
+            for key in ['ue_ambr_ul', 'ue_ambr_dl']:
                 if str(old_data.get(key, '')) != str(data.get(key, '')):
-                    qos_changed = True
+                    ambr_changed = True
+                    break
+
+            reattach_required = False
+            for key in ['default_apn', 'apn_list']:
+                if str(old_data.get(key, '')) != str(data.get(key, '')):
+                    reattach_required = True
                     break
             
-            if qos_changed and data.get('enabled', False) == True:
-                print("Subscriber QoS/speed updated, checking to see if we need to trigger an ISD")
+            if ambr_changed and data.get('enabled', False) == True:
+                print("Subscriber AMBR updated, checking to see if we need to trigger an ISD")
                 try:
                     if data.get('serving_mme'):
-                        print("Serving MME set - Sending ISD")
+                        print("Serving MME set - Sending ISD for real-time AMBR refresh")
                         peer = data.get('serving_mme_peer', data['serving_mme'])
                         if peer and ';' in peer:
                             peer = peer.split(';')[0]
 
-                        diameterClient.sendDiameterRequest(
-                            requestType='ISD',
-                            hostname=peer,
-                            imsi=data['imsi'], 
-                            DestinationHost=data['serving_mme'], 
-                            DestinationRealm=data['serving_mme_realm']
+                        _, isa_result_code = send_isd_and_log_result(
+                            imsi=data['imsi'],
+                            serving_mme=data['serving_mme'],
+                            serving_mme_realm=data['serving_mme_realm'],
+                            serving_mme_peer=peer,
+                            context='subscriber_ambr_update',
                         )
-                        print("Sent ISD via Peer " + str(peer))
+                        print("Sent ISD via Peer " + str(peer) + " with ISA Result-Code " + str(isa_result_code))
+                        if isa_result_code != 2001:
+                            print("ISD did not complete successfully, falling back to CLR with immediate reattach")
+                            _, cla_result_code = send_clr_and_log_result(
+                                imsi=data['imsi'],
+                                serving_mme=data['serving_mme'],
+                                serving_mme_realm=data['serving_mme_realm'],
+                                serving_mme_peer=peer,
+                                cancellation_type=1,
+                                immediate_reattach=True,
+                                context='subscriber_ambr_update_fallback',
+                            )
+                            print("Sent fallback CLR via Peer " + str(peer) + " with CLA Result-Code " + str(cla_result_code))
                     else:
                         print("No serving MME set - Not sending ISD")
                 except Exception as e:
                     print("Error sending ISD: " + str(e))
+
+            if reattach_required and data.get('enabled', False) == True:
+                print("Subscriber profile updated, checking to see if we need to trigger a CLR with reattach")
+                try:
+                    if data.get('serving_mme'):
+                        print("Serving MME set - Sending CLR with immediate reattach")
+                        peer = data.get('serving_mme_peer', data['serving_mme'])
+                        if peer and ';' in peer:
+                            peer = peer.split(';')[0]
+
+                        _, cla_result_code = send_clr_and_log_result(
+                            imsi=data['imsi'],
+                            serving_mme=data['serving_mme'],
+                            serving_mme_realm=data['serving_mme_realm'],
+                            serving_mme_peer=peer,
+                            cancellation_type=1,
+                            immediate_reattach=True,
+                            context='subscriber_profile_update',
+                        )
+                        print("Sent CLR via Peer " + str(peer) + " with immediate reattach and CLA Result-Code " + str(cla_result_code))
+                    else:
+                        print("No serving MME set - Not sending CLR")
+                except Exception as e:
+                    print("Error sending CLR: " + str(e))
 
             return data, 200
         except Exception as E:

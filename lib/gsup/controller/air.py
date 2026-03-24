@@ -40,6 +40,8 @@ class AIRController(GsupController):
         try:
             validate_imsi(imsi)
             subscriber = self._database.Get_Subscriber(imsi=imsi)
+            if not subscriber.get('enabled', False):
+                raise ValueError(f"Subscriber disabled: {imsi}")
             rand = GsupMessageUtil.get_first_ie_by_name('rand', request_dict)
             auts = GsupMessageUtil.get_first_ie_by_name('auts', request_dict)
 
@@ -74,7 +76,7 @@ class AIRController(GsupController):
                 .build(),
             )
         except ValueError as e:
-            await self._logger.logAsync(service='GSUP', level='WARN', message=f"Subscriber not found: {imsi}")
+            await self._logger.logAsync(service='GSUP', level='WARN', message=str(e))
             await self._send_gsup_response(
                 peer,
                 GsupMessageBuilder().with_msg_type(MsgType.SEND_AUTH_INFO_ERROR)

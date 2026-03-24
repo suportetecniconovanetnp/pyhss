@@ -57,7 +57,9 @@ class Diameter:
         else:
             self.redisMessaging = RedisMessaging(host=self.redisHost, port=self.redisPort, useUnixSocket=self.redisUseUnixSocket, unixSocketPath=self.redisUnixSocketPath)
         
-        self.hostname = socket.gethostname()
+        # Use the configured Diameter Origin-Host as the Redis prefix namespace so
+        # API/HSS helper clients look up the same active peer set as the Diameter service.
+        self.hostname = originHost
 
         self.database = Database(logTool=logTool, main_service=main_service)
         self.diameterRequestTimeout = int(config.get('hss', {}).get('diameter_request_timeout', 10))
@@ -737,7 +739,7 @@ class Diameter:
         
     def getPeerType(self, originHost: str) -> str:
         try:
-            peerTypes = ['mme', 'pgw', 'pcscf', 'icscf', 'scscf', 'hss', 'ocs', 'dra', 'smf', 'amf']
+            peerTypes = ['mme', 'pgw', 'pcscf', 'icscf', 'scscf', 'hss', 'ocs', 'dra']
 
             for peer in peerTypes:
                 if peer in originHost.lower():
@@ -832,7 +834,7 @@ class Diameter:
     def getConnectedPeersByType(self, peerType: str) -> list:
         try:
             requestedPeerType = peerType.lower()
-            peerTypes = ['mme', 'pgw', 'pcscf', 'icscf', 'scscf', 'hss', 'ocs', 'dra', 'smf', 'amf']
+            peerTypes = ['mme', 'pgw', 'pcscf', 'icscf', 'scscf', 'hss', 'ocs', 'dra']
             filteredConnectedPeers = []
 
             if requestedPeerType not in peerTypes:
@@ -1043,8 +1045,12 @@ class Diameter:
                     return ''
                 outboundQueue = f"diameter-outbound-{peerIp}-{peerPort}"
                 sendTime = time.time_ns()
+                if peerIp is None or peerPort is None:
+                    continue
+
+                # Ensure port is string as required by OutboundData validator
                 outboundMessage = OutboundData(DestinationIp=peerIp,
-                                                DestinationPort=peerPort,
+                                                DestinationPort=str(peerPort),
                                                 InitialReceiveTimestamp=sendTime,
                                                 OutboundHex=request)
                 self.redisMessaging.sendMessage(queue=outboundQueue, message=outboundMessage.model_dump_json(), queueExpiry=self.diameterRequestTimeout, usePrefix=True, prefixHostname=self.hostname, prefixServiceName='diameter')
@@ -1356,23 +1362,24 @@ class Diameter:
                             if apnDataKey == 'serving_pgw_realm':
                                 servingPgwRealm = apnDataValue
                             if apnDataKey == 'serving_pgw':
-                                servingPgwRealm = apnDataValue
+                                servingPgw = apnDataValue
                             
+                        self.logTool.log(service='HSS', level='debug', message=f"[diameter.py] [deregisterApn] APN: {apnKey} - pcrfSessionId: {pcrfSessionId}, servingPgwPeer: {servingPgwPeer}, servingPgwRealm: {servingPgwRealm}, servingPgw: {servingPgw}", redisClient=self.redisMessaging)
                         if pcrfSessionId is not None and servingPgwPeer is not None and servingPgwRealm is not None and servingPgw is not None:
                             if ';' in servingPgwPeer:
                                 servingPgwPeer = servingPgwPeer.split(';')[0]
                             
-                            self.logTool.log(service='HSS', level='debug', message=f"[diameter.py] [deregisterData] Sending CCR-T with Session-ID:{pcrfSessionId} to peer: {servingPgwPeer} {apnKey}", redisClient=self.redisMessaging)
+                            self.logTool.log(service='HSS', level='debug', message=f"[diameter.py] [deregisterApn] Sending CCR-T with Session-ID:{pcrfSessionId} to peer: {servingPgwPeer} {apnKey}", redisClient=self.redisMessaging)
 
                             self.sendDiameterRequest(
                             requestType='CCR',
                             hostname=servingPgwPeer,
                             imsi=imsi,
+                            apn=apnKey,
                             destinationHost=servingPgw, 
                             destinationRealm=servingPgwRealm,
                             ccr_type=3,
-                            sessionId=pcrfSessionId,
-                            domain=servingPgwRealm
+                            sessionId=pcrfSessionId
                             )
 
                             self.logTool.log(service='HSS', level='debug', message=f"[diameter.py] [deregisterData] Sending RTR to peer: {servingPgwPeer} {apnKey}", redisClient=self.redisMessaging)
@@ -2198,6 +2205,12 @@ class Diameter:
             subscriber_details = self.database.Get_Subscriber(imsi=imsi)                                               #Get subscriber details
             if subscriber_details['enabled'] == 0:
                 self.logTool.log(service='HSS', level='debug', message=f"Subscriber {imsi} is disabled", redisClient=self.redisMessaging)
+                # Clear stale serving_mme to keep state consistent
+                try:
+                    self.database.Update_Serving_MME(imsi=imsi, serving_mme=None)
+                    self.logTool.log(service='HSS', level='info', message=f"[diameter.py] [Answer_16777251_318] Cleared stale serving_mme for disabled subscriber: {imsi}", redisClient=self.redisMessaging)
+                except Exception as e:
+                    self.logTool.log(service='HSS', level='warning', message=f"[diameter.py] [Answer_16777251_318] Failed to clear serving_mme for disabled subscriber: {imsi} - {e}", redisClient=self.redisMessaging)
                 avp = ''
                 session_id = self.get_avp_data(avps, 263)[0]                                                     #Get Session-ID
                 avp += self.generate_avp(263, 40, session_id)                                                    #Session-ID AVP set

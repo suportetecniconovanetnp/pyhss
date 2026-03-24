@@ -10,8 +10,11 @@ import socket
 
 from osmocom.gsup.message import MsgType, GsupMessage
 
+from database import Database, SUBSCRIBER
 from gsup.protocol.gsup_msg import GsupMessageBuilder, GsupMessageUtil
 from gsup.protocol.osmocom_ipa import IPA
+from logtool import LogTool
+from pyhss_config import config
 
 
 class GSUPClient:
@@ -71,11 +74,10 @@ class GSUPClient:
         self.sock.send(data)
 
         response = self.__read_response()
-
         print(f"Received response: {response.to_dict()}")
-        assert response.msg_type == MsgType.SEND_AUTH_INFO_RESULT
+        return response
 
-    def send_ulr_request(self, imsi):
+    def send_ulr_request(self, imsi, complete_transaction=True):
         request = (GsupMessageBuilder()
          .with_msg_type(MsgType.UPDATE_LOCATION_REQUEST)
          .with_ie('imsi', imsi)
@@ -87,7 +89,8 @@ class GSUPClient:
 
         response = self.__read_response()
         print(f"Received response: {response.to_dict()}")
-        assert response.msg_type == MsgType.INSERT_DATA_REQUEST
+        if not complete_transaction or response.msg_type != MsgType.INSERT_DATA_REQUEST:
+            return response
 
         # Send the insert data response
         insert_data_resp = (GsupMessageBuilder()
@@ -101,7 +104,7 @@ class GSUPClient:
 
         response = self.__read_response()
         print(f"Received response: {response.to_dict()}")
-        assert response.msg_type == MsgType.UPDATE_LOCATION_RESULT
+        return response
 
     def wait_for_location_cancel(self):
         response = self.__read_response()
@@ -149,11 +152,34 @@ def test_gsup_air(run_redis, create_test_db, run_pyhss_hss, run_pyhss_gsup):
     client.connect()
     client2.connect()
 
-    client.send_auth_info_request('262423403000001')
-    client.send_ulr_request('262423403000001')
+    response = client.send_auth_info_request('262423403000001')
+    assert response.msg_type == MsgType.SEND_AUTH_INFO_RESULT
+
+    response = client.send_ulr_request('262423403000001')
+    assert response.msg_type == MsgType.UPDATE_LOCATION_RESULT
 
     #client2.wait_for_location_cancel()
     client.send_purge_ue('262423403000001')
 
     client.disconnect()
     client2.disconnect()
+
+
+def test_gsup_rejects_disabled_subscriber(run_redis, create_test_db, run_pyhss_hss, run_pyhss_gsup):
+    database = Database(LogTool(config))
+    subscriber = database.Get_Subscriber(imsi='262423403000001')
+    subscriber['enabled'] = False
+    database.UpdateObj(SUBSCRIBER, subscriber, subscriber['subscriber_id'])
+
+    client = GSUPClient('127.0.0.1', 4222, 'SGSN-NG')
+    client.connect()
+
+    response = client.send_auth_info_request('262423403000001')
+    assert response.msg_type == MsgType.SEND_AUTH_INFO_ERROR
+
+    response = client.send_ulr_request('262423403000001', complete_transaction=False)
+    assert response.msg_type == MsgType.UPDATE_LOCATION_ERROR
+
+    client.disconnect()
+    subscriber['enabled'] = True
+    database.UpdateObj(SUBSCRIBER, subscriber, subscriber['subscriber_id'])

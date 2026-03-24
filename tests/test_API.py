@@ -584,6 +584,21 @@ class GeoRed_MME(unittest.TestCase):
         payload['serving_mme_timestamp'] = self.__class__.subscriber_template_data['serving_mme_timestamp']
         self.assertEqual(self.__class__.subscriber_template_data, payload, "JSON body should match input")
 
+    def test_G_2a_Patch_MME_Subscriber_QoS(self):
+        headers = {"Content-Type": "application/json"}
+        patch_data = {"ue_ambr_ul": 555555, "ue_ambr_dl": 555555}
+        r = requests.patch(str(base_url) + '/subscriber/' + str(self.__class__.subscriber_id), data=json.dumps(patch_data), headers=headers)
+        self.assertEqual(r.status_code, 200, "Status Code should be 200 OK")
+        self.__class__.subscriber_template_data['ue_ambr_ul'] = 555555
+        self.__class__.subscriber_template_data['ue_ambr_dl'] = 555555
+
+    def test_G_2b_Patch_MME_Subscriber_Disable(self):
+        headers = {"Content-Type": "application/json"}
+        patch_data = {"enabled": False}
+        r = requests.patch(str(base_url) + '/subscriber/' + str(self.__class__.subscriber_id), data=json.dumps(patch_data), headers=headers)
+        self.assertEqual(r.status_code, 200, "Status Code should be 200 OK")
+        self.__class__.subscriber_template_data['enabled'] = False
+
     def test_G_3_GeoRed_MME_Clear_MME_Sub(self):
         headers = {"Content-Type": "application/json"}
         r = requests.patch(str(base_url) + '/geored/', data=json.dumps({

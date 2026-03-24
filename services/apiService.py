@@ -301,10 +301,71 @@ def handle_exception(e):
         if "CSV file does not exist" in error_message:
             response_json['reason'] = f'EIR CSV file is not defined / does not exist'
             return response_json, 410
+        response_json['reason'] = f'A processing error occurred: {e}'
+        return response_json, 400
     else:
         response_json['reason'] = f'An internal server error occurred: {e}'
         logTool.log(service='API', level='error', message=f"[API] Additional Error Information: {traceback.format_exc()}\n{sys.exc_info()[2]}", redisClient=redisMessaging)
         return response_json, 500
+
+
+def send_clr_and_log_result(imsi, serving_mme, serving_mme_realm, serving_mme_peer, cancellation_type, immediate_reattach, context, timeout=1.0):
+    logTool.log(
+        service='API',
+        level='info',
+        message=(
+            f"[API] [{context}] CLR routing details for IMSI {imsi}: "
+            f"serving_mme={serving_mme}, serving_mme_realm={serving_mme_realm}, "
+            f"serving_mme_peer={serving_mme_peer}, cancellation_type={cancellation_type}, "
+            f"immediateReattach={immediate_reattach}"
+        ),
+        redisClient=redisMessaging,
+    )
+
+    diameter_response = diameterClient.awaitDiameterRequestAndResponse(
+        requestType='CLR',
+        hostname=serving_mme_peer,
+        imsi=imsi,
+        DestinationHost=serving_mme,
+        DestinationRealm=serving_mme_realm,
+        CancellationType=cancellation_type,
+        immediateReattach=immediate_reattach,
+        timeout=timeout,
+    )
+
+    if not diameter_response:
+        logTool.log(
+            service='API',
+            level='warning',
+            message=f"[API] [{context}] CLR timed out waiting for CLA from peer {serving_mme_peer} for IMSI {imsi}",
+            redisClient=redisMessaging,
+        )
+        return '', None
+
+    try:
+        cla_packet_vars, cla_avps = diameterClient.decode_diameter_packet(diameter_response)
+        cla_result_code = int(diameterClient.get_avp_data(cla_avps, 268)[0], 16)
+        logTool.log(
+            service='API',
+            level='info',
+            message=(
+                f"[API] [{context}] Received CLA from peer {serving_mme_peer} for IMSI {imsi}: "
+                f"result_code={cla_result_code}, packet_vars={cla_packet_vars}"
+            ),
+            redisClient=redisMessaging,
+        )
+        return diameter_response, cla_result_code
+    except Exception:
+        logTool.log(
+            service='API',
+            level='warning',
+            message=(
+                f"[API] [{context}] Received CLR response from peer {serving_mme_peer} for IMSI {imsi}, "
+                f"but failed to decode CLA: {traceback.format_exc()}"
+            ),
+            redisClient=redisMessaging,
+        )
+        return diameter_response, None
 
 apiService.before_request(auth_before_request)
 
@@ -564,32 +625,79 @@ class PyHSS_SUBSCRIBER_Get(Resource):
                 json_data['msisdn'] = json_data['msisdn'].replace('+', '')
             args = parser.parse_args()
             operation_id = args.get('operation_id', None)
+
+            try:
+                old_data = databaseClient.Get_Subscriber(subscriber_id=subscriber_id)
+            except Exception:
+                old_data = {}
+
             data = databaseClient.UpdateObj(SUBSCRIBER, json_data, subscriber_id, False, operation_id)
 
             #If the subscriber is enabled, trigger an ISD in 2G
             if 'enabled' in json_data and json_data['enabled'] == True:
-                update_event = databaseClient.Get_Gsup_SubscriberInfo(json_data['imsi'])
-                redisMessaging.sendMessage('subscriber_update', update_event.model_dump_json())
+                try:
+                    update_event = databaseClient.Get_Gsup_SubscriberInfo(data.get('imsi'))
+                    redisMessaging.sendMessage('subscriber_update', update_event.model_dump_json())
+                except Exception as e:
+                    print("Error sending 2G subscriber_update: " + str(e))
 
             #If the "enabled" flag on the subscriber is now disabled, trigger a CLR
-            if 'enabled' in json_data and json_data['enabled'] == False:
+            if old_data.get('enabled', False) == True and data.get('enabled', False) == False:
                 print("Subscriber is now disabled, checking to see if we need to trigger a CLR")
                 #See if we have a serving MME set
                 try:
-                    assert(json_data['serving_mme'])
-                    print("Serving MME set - Sending CLR")
+                    if data.get('serving_mme'):
+                        print("Serving MME set - Sending CLR")
+                        peer = data.get('serving_mme_peer', data['serving_mme'])
+                        
+                        # sometimes serving_mme_peer contains multiple peers separated by ;
+                        if peer and ';' in peer:
+                            peer = peer.split(';')[0]
 
-                    diameterClient.sendDiameterRequest(
-                        requestType='CLR',
-                        hostname=json_data['serving_mme'],
-                        imsi=json_data['imsi'], 
-                        DestinationHost=json_data['serving_mme'], 
-                        DestinationRealm=json_data['serving_mme_realm'], 
-                        CancellationType=1
-                    )
-                    print("Sent CLR via Peer " + str(json_data['serving_mme']))
-                except:
-                    print("No serving MME set - Not sending CLR")
+                        _, cla_result_code = send_clr_and_log_result(
+                            imsi=data['imsi'],
+                            serving_mme=data['serving_mme'],
+                            serving_mme_realm=data['serving_mme_realm'],
+                            serving_mme_peer=peer,
+                            cancellation_type=1,
+                            immediate_reattach=False,
+                            context='subscriber_disable',
+                        )
+                        print("Sent CLR via Peer " + str(peer) + " with CLA Result-Code " + str(cla_result_code))
+                    else:
+                        print("No serving MME set - Not sending CLR")
+                except Exception as e:
+                    print("Error sending CLR: " + str(e))
+
+            #Check if QoS/Speed has changed and trigger ISD if attached
+            qos_changed = False
+            for key in ['ue_ambr_ul', 'ue_ambr_dl', 'apn_list']:
+                if str(old_data.get(key, '')) != str(data.get(key, '')):
+                    qos_changed = True
+                    break
+            
+            if qos_changed and data.get('enabled', False) == True:
+                print("Subscriber QoS/speed updated, checking to see if we need to trigger an ISD")
+                try:
+                    if data.get('serving_mme'):
+                        print("Serving MME set - Sending ISD")
+                        peer = data.get('serving_mme_peer', data['serving_mme'])
+                        if peer and ';' in peer:
+                            peer = peer.split(';')[0]
+
+                        diameterClient.sendDiameterRequest(
+                            requestType='ISD',
+                            hostname=peer,
+                            imsi=data['imsi'], 
+                            DestinationHost=data['serving_mme'], 
+                            DestinationRealm=data['serving_mme_realm']
+                        )
+                        print("Sent ISD via Peer " + str(peer))
+                    else:
+                        print("No serving MME set - Not sending ISD")
+                except Exception as e:
+                    print("Error sending ISD: " + str(e))
+
             return data, 200
         except Exception as E:
             print(E)
@@ -1316,7 +1424,10 @@ class PyHSS_OAM_Deregister(Resource):
         '''Deregisters a given IMSI from the entire network.'''
         try:
             subscriberInfo = databaseClient.Get_Subscriber(imsi=str(imsi))
-            imsSubscriberInfo = databaseClient.Get_IMS_Subscriber(imsi=str(imsi))
+            try:
+                imsSubscriberInfo = databaseClient.Get_IMS_Subscriber(imsi=str(imsi))
+            except Exception:
+                imsSubscriberInfo = {}
             subscriberId = subscriberInfo.get('subscriber_id', None)
             servingMmePeer = subscriberInfo.get('serving_mme_peer', None)
             servingMme = subscriberInfo.get('serving_mme', None)
@@ -1330,14 +1441,17 @@ class PyHSS_OAM_Deregister(Resource):
                     servingMmePeer = servingMmePeer.split(';')[0]
 
                 # Send the CLR to the serving MME
-                diameterClient.sendDiameterRequest(
-                requestType='CLR',
-                hostname=servingMmePeer,
-                imsi=imsi, 
-                DestinationHost=servingMme, 
-                DestinationRealm=servingMmeRealm, 
-                CancellationType=2
+                logTool.log(service='API', level='info', message=f"[API] [deregister] Sending CLR to MME: {servingMmePeer} ({servingMme}) for IMSI: {imsi}", redisClient=redisMessaging)
+                _, cla_result_code = send_clr_and_log_result(
+                    imsi=imsi,
+                    serving_mme=servingMme,
+                    serving_mme_realm=servingMmeRealm,
+                    serving_mme_peer=servingMmePeer,
+                    cancellation_type=2,
+                    immediate_reattach=False,
+                    context='deregister',
                 )
+                logTool.log(service='API', level='info', message=f"[API] [deregister] CLR completed for MME: {servingMmePeer} for IMSI: {imsi} with CLA Result-Code: {cla_result_code}", redisClient=redisMessaging)
             
             #Broadcast the CLR to all connected MME's, regardless of whether the subscriber is attached.
             diameterClient.broadcastDiameterRequest(
@@ -1376,7 +1490,8 @@ class PyHSS_OAM_Deregister(Resource):
             domain=servingScscfRealm
             )
 
-            databaseClient.Update_Serving_CSCF(imsi=imsi, serving_cscf=None)
+            if len(imsSubscriberInfo) > 0:
+                databaseClient.Update_Serving_CSCF(imsi=imsi, serving_cscf=None)
 
             # If a subscriber has an active serving apn, grab the pcrf session id for that apn and send a CCR-T, then a Registration Termination Request to the serving pgw peer.
             if subscriberId is not None:
@@ -1395,23 +1510,26 @@ class PyHSS_OAM_Deregister(Resource):
                             if apnDataKey == 'serving_pgw_realm':
                                 servingPgwRealm = apnDataValue
                             if apnDataKey == 'serving_pgw':
-                                servingPgwRealm = apnDataValue
+                                servingPgw = apnDataValue
                             
+                        logTool.log(service='API', level='debug', message=f"[API] [deregister] APN: {apnKey} - pcrfSessionId: {pcrfSessionId}, servingPgwPeer: {servingPgwPeer}, servingPgwRealm: {servingPgwRealm}, servingPgw: {servingPgw}", redisClient=redisMessaging)
                         if pcrfSessionId is not None and servingPgwPeer is not None and servingPgwRealm is not None and servingPgw is not None:
                             if ';' in servingPgwPeer:
                                 servingPgwPeer = servingPgwPeer.split(';')[0]
 
+                            logTool.log(service='API', level='info', message=f"[API] [deregister] Sending CCR-T to PGW: {servingPgwPeer} for IMSI: {imsi}, APN: {apnKey}, Session: {pcrfSessionId}", redisClient=redisMessaging)
                             diameterClient.sendDiameterRequest(
                             requestType='CCR',
                             hostname=servingPgwPeer,
                             imsi=imsi,
+                            apn=apnKey,
                             destinationHost=servingPgw, 
                             destinationRealm=servingPgwRealm,
                             ccr_type=3,
-                            sessionId=pcrfSessionId,
-                            domain=servingPgwRealm
+                            sessionId=pcrfSessionId
                             )
 
+                            logTool.log(service='API', level='info', message=f"[API] [deregister] Sending RTR to PGW: {servingPgwPeer} for IMSI: {imsi}, APN: {apnKey}", redisClient=redisMessaging)
                             diameterClient.sendDiameterRequest(
                             requestType='RTR',
                             hostname=servingPgwPeer,
@@ -1420,16 +1538,18 @@ class PyHSS_OAM_Deregister(Resource):
                             destinationRealm=servingPgwRealm, 
                             domain=servingPgwRealm
                             )
+                        else:
+                            logTool.log(service='API', level='warning', message=f"[API] [deregister] Skipping CCR-T/RTR for APN: {apnKey} — missing fields: pcrfSessionId={pcrfSessionId}, servingPgwPeer={servingPgwPeer}, servingPgwRealm={servingPgwRealm}, servingPgw={servingPgw}", redisClient=redisMessaging)
                         
                         diameterClient.broadcastDiameterRequest(
                             requestType='CCR',
                             peerType='PGW',
                             imsi=imsi,
+                            apn=apnKey,
                             destinationHost=servingPgw, 
                             destinationRealm=servingPgwRealm,
                             ccr_type=3,
-                            sessionId = pcrfSessionId,
-                            domain=servingPgwRealm
+                            sessionId=pcrfSessionId
                             )
                         
                         diameterClient.broadcastDiameterRequest(
@@ -1444,7 +1564,10 @@ class PyHSS_OAM_Deregister(Resource):
                         databaseClient.Update_Serving_APN(imsi=imsi, apn=apnKey, pcrf_session_id=None, serving_pgw=None, subscriber_routing='')
 
             subscriberInfo = databaseClient.Get_Subscriber(imsi=str(imsi))
-            imsSubscriberInfo = databaseClient.Get_IMS_Subscriber(imsi=str(imsi))
+            try:
+                imsSubscriberInfo = databaseClient.Get_IMS_Subscriber(imsi=str(imsi))
+            except Exception:
+                imsSubscriberInfo = {}
             servingApns = databaseClient.Get_Serving_APNs(subscriber_id=subscriberId)
 
             return {'subscriber': subscriberInfo, 'ims_subscriber': imsSubscriberInfo, 'pcrf': servingApns}, 200

@@ -154,6 +154,9 @@ class ULRController(GsupController):
             except ValueError as e:
                 raise ULRError(f"Subscriber not found: {imsi}", GMMCause.IMSI_UNKNOWN) from e
 
+            if not subscriber.get('enabled', False):
+                raise ULRError(f"Subscriber disabled: {imsi}", GMMCause.IMSI_UNKNOWN)
+
             for rat_type_to_check in rat_types_to_check:
                 if not self.__rat_restriction_checker.is_rat_allowed(subscriber['attributes'], rat_type_to_check):
                     raise ULRError(f"RAT {rat_type_to_check.value} not allowed for subscriber {imsi}", GMMCause.NO_SUIT_CELL_IN_LA)

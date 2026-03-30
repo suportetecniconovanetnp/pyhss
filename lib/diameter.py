@@ -2458,9 +2458,24 @@ class Diameter:
 
     #3GPP Gx Credit Control Answer
     def Answer_16777238_272(self, packet_vars, avps):
+        imsi = "Unknown"
+        avp = ''
+        session_id = None
         try:
-            CC_Request_Type = self.get_avp_data(avps, 416)[0]
-            CC_Request_Number = self.get_avp_data(avps, 415)[0]
+            session_id_values = self.get_avp_data(avps, 263)
+            if not session_id_values:
+                raise ValueError("Missing Session-ID AVP in CCR")
+            session_id = session_id_values[0]
+
+            cc_request_type_values = self.get_avp_data(avps, 416)
+            if not cc_request_type_values:
+                raise ValueError("Missing CC-Request-Type AVP in CCR")
+            CC_Request_Type = cc_request_type_values[0]
+
+            cc_request_number_values = self.get_avp_data(avps, 415)
+            if not cc_request_number_values:
+                raise ValueError("Missing CC-Request-Number AVP in CCR")
+            CC_Request_Number = cc_request_number_values[0]
             #Called Station ID
             self.logTool.log(service='HSS', level='debug', message="[diameter.py] [Answer_16777238_272] [CCA] Attempting to find APN in CCR", redisClient=self.redisMessaging)
             apn = bytes.fromhex(self.get_avp_data(avps, 30)[0]).decode('utf-8')
@@ -2488,8 +2503,6 @@ class Diameter:
             self.logTool.log(service='HSS', level='debug', message="[diameter.py] [Answer_16777238_272] [CCA] Remote Peer is " + str(remote_peer), redisClient=self.redisMessaging)
             remote_peer = remote_peer + ";" + str(config['hss']['OriginHost'])
 
-            avp = ''                                                                                    #Initiate empty var AVP
-            session_id = self.get_avp_data(avps, 263)[0]                                                     #Get Session-ID
             self.logTool.log(service='HSS', level='debug', message="[diameter.py] [Answer_16777238_272] [CCA] Session Id is " + str(binascii.unhexlify(session_id).decode()), redisClient=self.redisMessaging)
             avp += self.generate_avp(263, 40, session_id)                                                    #Session-ID AVP set
             avp += self.generate_avp(264, 40, self.OriginHost)                                                    #Origin Host
@@ -2891,8 +2904,14 @@ class Diameter:
             avp += self.generate_avp(268, 40, self.int_to_hex(2001, 4))                                           #Result Code (DIAMETER_SUCCESS (2001))
             response = self.generate_diameter_packet("01", "40", 272, 16777238, packet_vars['hop-by-hop-identifier'], packet_vars['end-to-end-identifier'], avp)     #Generate Diameter packet
         except Exception as e:                                             #Get subscriber details
-            #Handle if the subscriber is not present in HSS return "DIAMETER_ERROR_USER_UNKNOWN"
-            self.logTool.log(service='HSS', level='debug', message="[diameter.py] [Answer_16777238_272] [CCA] Subscriber " + str(imsi) + " unknown in HSS for CCR", redisClient=self.redisMessaging)
+            self.logTool.log(service='HSS', level='error', message=f"[diameter.py] [Answer_16777238_272] [CCA] Error generating CCA: {traceback.format_exc()}", redisClient=self.redisMessaging)
+
+            missing_mandatory_avp = isinstance(e, ValueError) and "Missing " in str(e) and " AVP in CCR" in str(e)
+            if missing_mandatory_avp:
+                self.logTool.log(service='HSS', level='warning', message=f"[diameter.py] [Answer_16777238_272] [CCA] {e}", redisClient=self.redisMessaging)
+            else:
+                #Handle if the subscriber is not present in HSS return "DIAMETER_ERROR_USER_UNKNOWN"
+                self.logTool.log(service='HSS', level='debug', message="[diameter.py] [Answer_16777238_272] [CCA] Subscriber " + str(imsi) + " unknown in HSS for CCR", redisClient=self.redisMessaging)
 
             self.redisMessaging.sendMetric(serviceName='diameter', metricName='prom_diam_auth_event_count',
                                             metricType='counter', metricAction='inc', 
@@ -2900,14 +2919,19 @@ class Diameter:
                                             metricLabels={
                                                         "diameter_application_id": 16777238,
                                                         "diameter_cmd_code": 272,
-                                                        "event": "Unknown User",
-                                                        "imsi_prefix": str(imsi[0:6])},
+                                                        "event": ("Missing AVP" if missing_mandatory_avp else "Unknown User"),
+                                                        "imsi_prefix": str(imsi)[0:6]},
                                             metricHelp='Diameter Authentication related Counters',
                                             metricExpiry=60,
                                             usePrefix=True, 
                                             prefixHostname=self.hostname, 
                                             prefixServiceName='metric')
-            avp += self.generate_avp(268, 40, self.int_to_hex(5030, 4))                                           #Result Code (DIAMETER ERROR - User Unknown)
+            if session_id is not None and len(avp) == 0:
+                avp += self.generate_avp(263, 40, session_id)
+                avp += self.generate_avp(264, 40, self.OriginHost)
+                avp += self.generate_avp(296, 40, self.OriginRealm)
+                avp += self.generate_avp(258, 40, "01000016")
+            avp += self.generate_avp(268, 40, self.int_to_hex((5005 if missing_mandatory_avp else 5030), 4))
             response = self.generate_diameter_packet("01", "40", 272, 16777238, packet_vars['hop-by-hop-identifier'], packet_vars['end-to-end-identifier'], avp)     #Generate Diameter packet
         return response
 

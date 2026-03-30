@@ -602,6 +602,7 @@ class Diameter:
         processed_avps = []
         # Initialize a failsafe counter, to prevent packets that pass validation but aren't AVPs from causing an infinite loop
         failsafeCounter = 0
+        avp_vars = {}
 
         # If the avp data is 8 bytes (16 chars) or less, it's invalid.
         if len(data) < 16:
@@ -657,7 +658,13 @@ class Diameter:
                     failsafeCounter += 1
 
                     if failsafeCounter > 100:
-                        self.logTool.log(service='HSS', level='warning', message=f"[diameter.py] [decodeAvpPacket] Diameter Sub-AVP Decoder Failsafe activated: {data}", redisClient=self.redisMessaging)
+                        current_sub_avp_head = subAvpUnprocessedStack[-1][:64] if subAvpUnprocessedStack else ''
+                        self.logTool.log(
+                            service='HSS',
+                            level='warning',
+                            message=f"[diameter.py] [decodeAvpPacket] Diameter Sub-AVP Decoder Failsafe activated: parent_avp={avp_vars}, current_sub_avp_head={current_sub_avp_head}, unprocessed_sub_avps={len(subAvpUnprocessedStack)}, raw_data={data}",
+                            redisClient=self.redisMessaging
+                        )
                         break
                     
                     # Pop the sub avp data from the list (remove from the end)
@@ -707,7 +714,12 @@ class Diameter:
                     processed_avps.append(avp_vars)
                     data = data[avpPayloadLength:]
             except Exception as e:
-                print(e)
+                self.logTool.log(
+                    service='HSS',
+                    level='warning',
+                    message=f"[diameter.py] [decodeAvpPacket] Failed decoding AVP: error={traceback.format_exc()}, current_avp={avp_vars}, raw_data_head={data[:128]}",
+                    redisClient=self.redisMessaging
+                )
                 continue
 
         return processed_avps
@@ -1204,6 +1216,7 @@ class Diameter:
             return ''
 
     def generateDiameterResponse(self, binaryData: str) -> str:
+            packet_vars = {}
             try:
                 packet_vars, avps = self.decode_diameter_packet(binaryData)
                 origin_host = self.get_avp_data(avps, 264)[0]
@@ -1263,14 +1276,21 @@ class Diameter:
                 self.redisMessaging.sendMetric(serviceName='diameter', metricName='prom_diam_response_count_application_id_fail',
                                                 metricType='counter', metricAction='inc',
                                                 metricLabels={
-                                                    "diameter_application_id": packet_vars["ApplicationId"],
-                                                    "diameter_cmd_code": packet_vars["command_code"],
+                                                    "diameter_application_id": packet_vars.get("ApplicationId", "unknown"),
+                                                    "diameter_cmd_code": packet_vars.get("command_code", "unknown"),
                                                 },
                                                 metricValue=1.0, metricHelp='Number of Failed Diameter Responses',
                                                 metricExpiry=60,
                                                 usePrefix=True, 
                                                 prefixHostname=self.hostname, 
                                                 prefixServiceName='metric')
+                binary_data_preview = binaryData.hex()[:128] if isinstance(binaryData, bytes) else str(binaryData)[:128]
+                self.logTool.log(
+                    service='HSS',
+                    level='error',
+                    message=f"[diameter.py] [generateDiameterResponse] Failed generating response: packet_vars={packet_vars}, binary_data_head={binary_data_preview}, error={traceback.format_exc()}",
+                    redisClient=self.redisMessaging
+                )
                 return ''
 
     def generateDiameterRequest(self, requestType: str, **kwargs) -> str:

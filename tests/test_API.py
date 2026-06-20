@@ -7,6 +7,11 @@ import requests
 import json
 import logging
 import pytest
+import sqlalchemy
+
+import database
+from logtool import LogTool
+from pyhss_config import config
 
 log = logging.getLogger("UnitTestLogger")
 base_url = 'http://localhost:8080'
@@ -23,6 +28,9 @@ def payload_without_last_modified(payload):
     assert "last_modified" in payload
     del payload["last_modified"]
     return payload
+
+
+test_database = database.Database(LogTool(config), main_service=True)
 
 
 class API_Tests(unittest.TestCase):
@@ -693,6 +701,96 @@ class GeoRed_PCRF(unittest.TestCase):
         r = requests.delete(str(base_url) + '/subscriber/' + str(self.__class__.subscriber_id))
         r2 = requests.delete(str(base_url) + '/auc/' + str(self.__class__.subscriber_template_data['auc_id']))
         r3 = requests.delete(str(base_url) + '/apn/' + str(self.__class__.subscriber_template_data['default_apn']))
+        xres = {"Result": "OK"}
+        self.assertEqual(xres, r.json(), "JSON body should match " + str(xres))
+
+
+class OAM_Serving_Subs_PCRF_Tests(unittest.TestCase):
+    subscriber_id = 0
+    auc_id = 0
+    apn_id = 0
+    imsi = "001001000009999"
+
+    def test_A_create_auc(self):
+        headers = {"Content-Type": "application/json"}
+        payload = {"ki": "11d51018f65affc04e6d56d699df3a76", "opc": "12d51018f65affc04e6d56d699df3a76", "amf": "8000", "sqn": 99}
+        r = requests.put(str(base_url) + '/auc/', data=json.dumps(payload), headers=headers)
+        self.__class__.auc_id = r.json()['auc_id']
+        self.assertEqual(r.status_code, 200, "Status Code should be 200 OK")
+
+    def test_B_create_apn(self):
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "apn": "ServingSubsPCRFOrphan",
+            "pgw_address": "10.98.0.20",
+            "sgw_address": "10.98.0.10",
+            "charging_characteristics": "0800",
+            "apn_ambr_dl": 99999,
+            "apn_ambr_ul": 99999,
+            "qci": 7,
+            "arp_priority": 1,
+            "arp_preemption_capability": True,
+            "arp_preemption_vulnerability": True,
+        }
+        r = requests.put(str(base_url) + '/apn/', data=json.dumps(payload), headers=headers)
+        self.__class__.apn_id = r.json()['apn_id']
+        self.assertEqual(r.status_code, 200, "Status Code should be 200 OK")
+
+    def test_C_create_subscriber(self):
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "imsi": self.__class__.imsi,
+            "enabled": True,
+            "msisdn": self.__class__.imsi,
+            "ue_ambr_dl": 999999,
+            "ue_ambr_ul": 999999,
+            "nam": 0,
+            "subscribed_rau_tau_timer": 600,
+            "auc_id": self.__class__.auc_id,
+            "default_apn": self.__class__.apn_id,
+            "apn_list": str(self.__class__.apn_id),
+        }
+        r = requests.put(str(base_url) + '/subscriber/', data=json.dumps(payload), headers=headers)
+        self.__class__.subscriber_id = r.json()['subscriber_id']
+        self.assertEqual(r.status_code, 200, "Status Code should be 200 OK")
+
+    def test_D_create_serving_apn(self):
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "imsi": self.__class__.imsi,
+            "serving_apn": "ServingSubsPCRFOrphan",
+            "pcrf_session_id": "orphan-session",
+            "ue_ip": "1.2.3.5",
+            "serving_pgw": "pgwtestGeored",
+            "subscriber_routing": "orphan-subscriber-routing",
+        }
+        r = requests.patch(str(base_url) + '/geored/', data=json.dumps(payload), headers=headers)
+        self.assertEqual(r.status_code, 200, "Status Code should be 200 OK")
+
+    def test_E_handles_orphan_apn_reference(self):
+        with test_database.engine.begin() as connection:
+            connection.execute(
+                sqlalchemy.text(
+                    "UPDATE serving_apn SET apn = :invalid_apn_id WHERE subscriber_id = :subscriber_id"
+                ),
+                {"invalid_apn_id": 999999, "subscriber_id": self.__class__.subscriber_id},
+            )
+
+        r = requests.get(str(base_url) + '/oam/serving_subs_pcrf')
+        self.assertEqual(r.status_code, 200, "Status Code should be 200 OK")
+
+        payload = r.json()[self.__class__.imsi]
+        self.assertEqual(payload['apn'], 999999, "Serving APN record should preserve the orphan APN id")
+        self.assertIsNone(payload['apn_info'], "Orphan APN lookups should not fail the whole endpoint")
+        self.assertIn("No <class 'database.APN'> found with id 999999", payload['apn_info_error'])
+        self.assertFalse(payload['apn_configuration_status']['is_configured_for_subscriber'])
+        self.assertEqual(payload['apn_configuration_status']['configured_apn_ids'], [str(self.__class__.apn_id)])
+        self.assertIn("Serving APN id 999999 is not present in subscriber apn_list", payload['apn_configuration_status']['error'])
+
+    def test_Z_cleanup(self):
+        r = requests.delete(str(base_url) + '/subscriber/' + str(self.__class__.subscriber_id))
+        requests.delete(str(base_url) + '/auc/' + str(self.__class__.auc_id))
+        requests.delete(str(base_url) + '/apn/' + str(self.__class__.apn_id))
         xres = {"Result": "OK"}
         self.assertEqual(xres, r.json(), "JSON body should match " + str(xres))
 

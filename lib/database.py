@@ -1580,14 +1580,41 @@ class Database:
                         self.logTool.log(service='Database', level='debug', message="Error in filtering Get_Served_PCRF_Subscribers to local peer only: " + str(E), redisClient=self.redisMessaging)
                         continue
 
-                # Get APN Info
-                apn_info = self.GetObj(APN, result['apn'])
-                #self.logTool.log(service='Database', level='debug', message="Got APN Info: " + str(apn_info), redisClient=self.redisMessaging)
+                try:
+                    apn_info = self.GetObj(APN, result['apn'])
+                except ValueError as error:
+                    self.logTool.log(
+                        service='Database',
+                        level='warning',
+                        message=f"Skipping APN expansion for serving_apn_id {result.get('serving_apn_id')}: {error}",
+                        redisClient=self.redisMessaging,
+                    )
+                    apn_info = None
+                    result['apn_info_error'] = str(error)
                 result['apn_info'] = apn_info
 
-                # Get Subscriber Info
-                subscriber_info = self.GetObj(SUBSCRIBER, result['subscriber_id'])
+                try:
+                    subscriber_info = self.GetObj(SUBSCRIBER, result['subscriber_id'])
+                except ValueError as error:
+                    self.logTool.log(
+                        service='Database',
+                        level='warning',
+                        message=f"Skipping orphan serving_apn_id {result.get('serving_apn_id')} because subscriber lookup failed: {error}",
+                        redisClient=self.redisMessaging,
+                    )
+                    continue
                 result['subscriber_info'] = subscriber_info
+                apn_list = subscriber_info.get('apn_list') or ''
+                configured_apn_ids = {apn_id.strip() for apn_id in apn_list.split(',') if apn_id.strip()}
+                serving_apn_id = str(result['apn'])
+                result['apn_configuration_status'] = {
+                    'is_configured_for_subscriber': serving_apn_id in configured_apn_ids,
+                    'configured_apn_ids': sorted(configured_apn_ids, key=int) if configured_apn_ids else [],
+                }
+                if serving_apn_id not in configured_apn_ids:
+                    result['apn_configuration_status']['error'] = (
+                        f"Serving APN id {result['apn']} is not present in subscriber apn_list"
+                    )
 
                 #self.logTool.log(service='Database', level='debug', message="Got Subscriber Info: " + str(subscriber_info), redisClient=self.redisMessaging)
 

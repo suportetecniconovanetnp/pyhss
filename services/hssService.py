@@ -42,6 +42,55 @@ class HssService:
         self.benchmarking = config.get('hss').get('enable_benchmarking', False)
         self.hostname = self.originHost
         self.diameterPeerKey = config.get('hss', {}).get('diameter_peer_key', 'diameterPeers')
+        # Housekeeping and peer lookups are kept out of the per-message hot path.
+        self.emergencySubscriberCleanupInterval = int(config.get('hss', {}).get('emergency_subscriber_cleanup_interval', 60))
+        self.lastEmergencySubscriberCleanup = 0.0
+        self.peerCacheInterval = int(config.get('hss', {}).get('peer_cache_interval', 5))
+        self.peerCache = {}
+        self.lastPeerCacheRefresh = 0.0
+
+    def getPeerHostname(self, senderIp: str, senderPort: str):
+        """
+        Returns the hostname of the diameter peer matching the given ip and port,
+        or None if no peer matches.
+
+        The peer list changes rarely, so it is cached for peerCacheInterval seconds.
+        Reading it from Redis on every inbound message put a round trip (plus a full
+        hash decode) in front of every single diameter request.
+        """
+        now = time.monotonic()
+        if now - self.lastPeerCacheRefresh >= self.peerCacheInterval:
+            try:
+                peerCache = {}
+                diameterPeers = self.redisMessaging.getAllHashData(self.diameterPeerKey, usePrefix=True, prefixHostname=self.hostname, prefixServiceName='diameter')
+                if diameterPeers:
+                    for diameterPeerKey, diameterPeerValue in diameterPeers.items():
+                        diameterPeer = Peer.model_validate(pydantic_core.from_json(json.dumps(diameterPeerValue)))
+                        peerCache[(diameterPeer.IpAddress, diameterPeer.Port)] = diameterPeer.Hostname
+                self.peerCache = peerCache
+                self.lastPeerCacheRefresh = now
+            except Exception as e:
+                self.logTool.log(service='HSS', level='error', message=f"[HSS] [getPeerHostname] Error refreshing peer cache: {traceback.format_exc()}", redisClient=self.redisMessaging)
+
+        return self.peerCache.get((senderIp, senderPort), None)
+
+    def clearExpiredEmergencySubscribers(self) -> None:
+        """
+        Runs the emergency subscriber expiry sweep at most once every
+        emergencySubscriberCleanupInterval seconds.
+
+        This is periodic housekeeping which scans the whole EMERGENCY_SUBSCRIBER
+        table, so running it once per processed diameter message serialised a full
+        table scan in front of every request.
+        """
+        now = time.monotonic()
+        if now - self.lastEmergencySubscriberCleanup < self.emergencySubscriberCleanupInterval:
+            return
+        self.lastEmergencySubscriberCleanup = now
+        try:
+            self.diameterLibrary.clear_expired_emergency_subscribers()
+        except Exception as e:
+            self.logTool.log(service='HSS', level='error', message=f"[HSS] [clearExpiredEmergencySubscribers] Exception: {traceback.format_exc()}", redisClient=self.redisMessaging)
 
     def handleQueue(self):
         """
@@ -73,21 +122,18 @@ class HssService:
                         self.logTool.log(service='HSS', level='debug', message=f"[HSS] [handleQueue] Processing message ({messageNumber} of {len(buffered_diameter_messages)}): {buffered_diameter_message}", redisClient=self.redisMessaging)
 
                         try:
-                            diameterPeers = self.redisMessaging.getAllHashData(self.diameterPeerKey, usePrefix=True, prefixHostname=self.hostname, prefixServiceName='diameter')
-                            if diameterPeers:
-                                for diameterPeerKey, diameterPeerValue in diameterPeers.items():
-                                    diameterPeer = Peer.model_validate(pydantic_core.from_json(json.dumps(diameterPeerValue)))
-                                    # If this is a message from a stored peer, increment prom_diam_request_count_host by 1.
-                                    if diameterPeer.IpAddress == inboundData.SenderIp and diameterPeer.Port == inboundData.SenderPort:
-                                        self.redisMessaging.sendMetric(serviceName='diameter', metricName='prom_diam_request_count_host',
-                                                    metricType='gauge', metricAction='inc',
-                                                    metricLabels={
-                                                    "host": diameterPeer.Hostname},
-                                                    metricValue=float(1), metricHelp='Number of Diameter Requests Recieved per Host',
-                                                    metricExpiry=60,
-                                                    usePrefix=True, 
-                                                    prefixHostname=self.hostname, 
-                                                    prefixServiceName='metric')
+                            # If this is a message from a stored peer, increment prom_diam_request_count_host by 1.
+                            peerHostname = self.getPeerHostname(inboundData.SenderIp, inboundData.SenderPort)
+                            if peerHostname:
+                                self.redisMessaging.sendMetric(serviceName='diameter', metricName='prom_diam_request_count_host',
+                                            metricType='gauge', metricAction='inc',
+                                            metricLabels={
+                                            "host": peerHostname},
+                                            metricValue=float(1), metricHelp='Number of Diameter Requests Recieved per Host',
+                                            metricExpiry=60,
+                                            usePrefix=True,
+                                            prefixHostname=self.hostname,
+                                            prefixServiceName='metric')
 
                         except Exception as e:
                             self.logTool.log(service='HSS', level='error', message=f"[HSS] [handleQueue] Error updating prom_diam_request_count_host: {traceback.format_exc()}", redisClient=self.redisMessaging)
@@ -131,26 +177,25 @@ class HssService:
                             self.logTool.log(service='HSS', level='info', message=f"[HSS] [handleQueue] [{diameterMessageTypeInbound}] Time taken to process request: {round(((time.perf_counter() - startTime)*1000), 3)} ms", redisClient=self.redisMessaging)
 
                         try:
-                            self.diameterLibrary.clear_expired_emergency_subscribers()
-                            diameterPeers = self.redisMessaging.getAllHashData(self.diameterPeerKey, usePrefix=True, prefixHostname=self.hostname, prefixServiceName='diameter')
-                            if diameterPeers:
-                                for diameterPeerKey, diameterPeerValue in diameterPeers.items():
-                                    diameterPeer = Peer.model_validate(pydantic_core.from_json(json.dumps(diameterPeerValue)))
-                                    if diameterPeer.IpAddress == inboundData.SenderIp and diameterPeer.Port == inboundData.SenderPort:
-                                        self.redisMessaging.sendMetric(serviceName='diameter', metricName='prom_diam_response_count_host',
-                                                    metricType='gauge', metricAction='inc',
-                                                    metricLabels={
-                                                    "host": diameterPeer.Hostname},
-                                                    metricValue=float(1), metricHelp='Number of Diameter Responses Sent per Host',
-                                                    metricExpiry=60,
-                                                    usePrefix=True, 
-                                                    prefixHostname=self.hostname, 
-                                                    prefixServiceName='metric')
+                            peerHostname = self.getPeerHostname(inboundData.SenderIp, inboundData.SenderPort)
+                            if peerHostname:
+                                self.redisMessaging.sendMetric(serviceName='diameter', metricName='prom_diam_response_count_host',
+                                            metricType='gauge', metricAction='inc',
+                                            metricLabels={
+                                            "host": peerHostname},
+                                            metricValue=float(1), metricHelp='Number of Diameter Responses Sent per Host',
+                                            metricExpiry=60,
+                                            usePrefix=True,
+                                            prefixHostname=self.hostname,
+                                            prefixServiceName='metric')
 
                         except Exception as e:
                             self.logTool.log(service='HSS', level='error', message=f"[HSS] [handleQueue] Error updating prom_diam_response_count_host: {traceback.format_exc()}", redisClient=self.redisMessaging)
                             pass
 
+                # Periodic housekeeping, once per batch at most, after the
+                # responses for this batch have already been queued.
+                self.clearExpiredEmergencySubscribers()
 
             except Exception as e:
                 self.logTool.log(service='HSS', level='error', message=f"[HSS] [handleQueue] Exception: {traceback.format_exc()}", redisClient=self.redisMessaging)

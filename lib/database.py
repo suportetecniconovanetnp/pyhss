@@ -1036,7 +1036,9 @@ class Database:
     def GetObj(self, obj_type, obj_id=None, page=None, page_size=None):
         self.logTool.log(service='Database', level='debug', message="Called GetObj for type " + str(obj_type), redisClient=self.redisMessaging)
 
-        Base.metadata.create_all(self.engine)
+        # The schema is created and migrated at startup by DatabaseSchema().
+        # Calling create_all() here issued an existence check per table on every
+        # single read, which dominated the cost of diameter request handling.
         Session = sessionmaker(bind=self.engine)
         session = Session()
 
@@ -1082,7 +1084,8 @@ class Database:
     def GetAll(self, obj_type):
         self.logTool.log(service='Database', level='debug', message="Called GetAll for type " + str(obj_type), redisClient=self.redisMessaging)
 
-        Base.metadata.create_all(self.engine)
+        # The schema is created and migrated at startup by DatabaseSchema().
+        # See the note in GetObj().
         Session = sessionmaker(bind = self.engine)
         session = Session()
         final_result_list = []

@@ -1,0 +1,50 @@
+# Standalone PostgreSQL stack for PyHSS - ready to paste into Portainer's
+# "Web editor" when creating a new stack.
+#
+# In Portainer:
+#   1. Stacks -> Add stack -> Web editor -> paste this file's contents.
+#   2. In the "Environment variables" section (below the editor), add:
+#        POSTGRES_USER     = pyhss
+#        POSTGRES_PASSWORD = <a strong, unique password>
+#        POSTGRES_DB       = hss
+#   3. Deploy the stack.
+#
+# This is a separate stack from the PyHSS app stack on purpose: it can be
+# redeployed, updated, or backed up independently without touching the
+# running pyhss_api/diameter/hss/gsup containers. It creates a pyhss_shared
+# Docker network; when you're ready to cut PyHSS over to Postgres, attach
+# that network to the PyHSS stack too (see docker/docker-compose.postgres.yaml)
+# and point DATABASE_SERVER at `pyhss_postgres` (this container's name) with
+# DATABASE_TYPE=postgresql in the PyHSS stack's env (see
+# docker/.env.postgres.example).
+#
+# POSTGRES_PASSWORD has no default on purpose - deploy fails loudly if you
+# forget to set it, instead of silently using a guessable one.
+
+networks:
+  pyhss_shared:
+    name: pyhss_shared
+
+volumes:
+  pyhss_postgres_data:
+    name: pyhss_postgres_data
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: pyhss_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pyhss}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the stack's Environment variables}
+      POSTGRES_DB: ${POSTGRES_DB:-hss}
+    volumes:
+      - pyhss_postgres_data:/var/lib/postgresql/data
+    networks:
+      - pyhss_shared
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s

@@ -1,0 +1,42 @@
+# Postgres-scenario override for the main PyHSS stack.
+#
+# The base docker/docker-compose.yaml works standalone for the SQLite
+# scenario. To run PyHSS against the standalone Postgres stack
+# (docker/postgres/docker-compose.yaml) instead, deploy that stack first,
+# then deploy the PyHSS stack with both compose files, e.g.:
+#
+#   docker compose -f docker-compose.yaml -f docker-compose.postgres.yaml up -d
+#
+# In Portainer, add this file's contents as an additional "compose file" on
+# the same stack (or paste its services block into the stack editor) after
+# pointing docker/.env at postgres (DATABASE_TYPE=postgresql, etc. - see
+# docker/.env.postgres.example).
+#
+# This only adds network access to the pyhss_shared network created by the
+# postgres stack; it does not change DATABASE_TYPE - that still comes from
+# docker/.env.
+
+networks:
+  pyhss_shared:
+    external: true
+
+services:
+  pyhss_api:
+    networks:
+      - default
+      - pyhss_shared
+
+  pyhss_diameter:
+    networks:
+      - default
+      - pyhss_shared
+
+  pyhss_hss:
+    networks:
+      - default
+      - pyhss_shared
+
+  pyhss_gsup:
+    networks:
+      - default
+      - pyhss_shared

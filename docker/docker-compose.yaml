@@ -25,9 +25,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    networks:
-      - default
-      - pyhss_shared
 
   pyhss_diameter:
     image: ghcr.io/nickvsnetworking/pyhss/pyhss:development
@@ -51,9 +48,6 @@ services:
     depends_on:
       pyhss_api:
         condition: service_healthy
-    networks:
-      - default
-      - pyhss_shared
 
   pyhss_hss:
     image: ghcr.io/nickvsnetworking/pyhss/pyhss:development
@@ -68,9 +62,6 @@ services:
     depends_on:
       pyhss_diameter:
         condition: service_healthy
-    networks:
-      - default
-      - pyhss_shared
 
   pyhss_gsup:
     image: ghcr.io/nickvsnetworking/pyhss/pyhss:development
@@ -94,9 +85,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    networks:
-      - default
-      - pyhss_shared
 
   redis:
     image: "redis:7.0-alpine"
@@ -118,10 +106,3 @@ volumes:
   redis_data:
   pyhss_logs:
   pyhss_sqlite:
-
-networks:
-  # Created by docker/postgres/docker-compose.yaml. Deploy that stack first;
-  # only needed once PyHSS is actually cut over to Postgres (see
-  # DATABASE_TYPE in docker/.env) - joining it costs nothing before that.
-  pyhss_shared:
-    external: true

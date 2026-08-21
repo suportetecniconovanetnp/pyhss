@@ -21,6 +21,8 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: pyhss_postgres
+    ports:
+      - "127.0.0.1:5432:5432"
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in docker/postgres/.env}

@@ -768,13 +768,21 @@ class OAM_Serving_Subs_PCRF_Tests(unittest.TestCase):
         self.assertEqual(r.status_code, 200, "Status Code should be 200 OK")
 
     def test_E_handles_orphan_apn_reference(self):
-        with test_database.engine.begin() as connection:
-            connection.execute(
-                sqlalchemy.text(
-                    "UPDATE serving_apn SET apn = :invalid_apn_id WHERE subscriber_id = :subscriber_id"
-                ),
-                {"invalid_apn_id": 999999, "subscriber_id": self.__class__.subscriber_id},
-            )
+        # test_database's engine was opened at module import time, before
+        # create_test_db (re)creates tests/.pyhss.db, so it can end up bound
+        # to a stale file handle. Open a fresh engine against the current
+        # database instead of reusing test_database.engine.
+        fresh_engine = sqlalchemy.create_engine("sqlite:///" + str(config['database']['database']))
+        try:
+            with fresh_engine.begin() as connection:
+                connection.execute(
+                    sqlalchemy.text(
+                        "UPDATE serving_apn SET apn = :invalid_apn_id WHERE subscriber_id = :subscriber_id"
+                    ),
+                    {"invalid_apn_id": 999999, "subscriber_id": self.__class__.subscriber_id},
+                )
+        finally:
+            fresh_engine.dispose()
 
         r = requests.get(str(base_url) + '/oam/serving_subs_pcrf')
         self.assertEqual(r.status_code, 200, "Status Code should be 200 OK")

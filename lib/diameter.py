@@ -2927,31 +2927,51 @@ class Diameter:
             self.logTool.log(service='HSS', level='error', message=f"[diameter.py] [Answer_16777238_272] [CCA] Error generating CCA: {traceback.format_exc()}", redisClient=self.redisMessaging)
 
             missing_mandatory_avp = isinstance(e, ValueError) and "Missing " in str(e) and " AVP in CCR" in str(e)
-            if missing_mandatory_avp:
+
+            # CC_Request_Type is assigned on the first line of the try block, so it can still be
+            # unbound here if the CCR was malformed enough to fail on that very line.
+            try:
+                is_termination_request = int(CC_Request_Type) == 3
+            except (NameError, TypeError, ValueError):
+                is_termination_request = False
+
+            if is_termination_request:
+                # The session is being torn down either way. Answering with an error recovers
+                # nothing - it only makes the PGW/SMF log a failure and drop state for a session
+                # that is already going away, which can turn a single internal error into an
+                # attach/detach loop.
+                result_code = 2001
+                event_label = 'Termination Cleanup Failure'
+                self.logTool.log(service='HSS', level='warning', message=f"[diameter.py] [Answer_16777238_272] [CCA] Internal error handling CCR-T for {imsi}, answering DIAMETER_SUCCESS as the session is terminating regardless", redisClient=self.redisMessaging)
+            elif missing_mandatory_avp:
+                result_code = 5005
+                event_label = 'Missing AVP'
                 self.logTool.log(service='HSS', level='warning', message=f"[diameter.py] [Answer_16777238_272] [CCA] {e}", redisClient=self.redisMessaging)
             else:
                 #Handle if the subscriber is not present in HSS return "DIAMETER_ERROR_USER_UNKNOWN"
+                result_code = 5030
+                event_label = 'Unknown User'
                 self.logTool.log(service='HSS', level='debug', message="[diameter.py] [Answer_16777238_272] [CCA] Subscriber " + str(imsi) + " unknown in HSS for CCR", redisClient=self.redisMessaging)
 
             self.redisMessaging.sendMetric(serviceName='diameter', metricName='prom_diam_auth_event_count',
-                                            metricType='counter', metricAction='inc', 
-                                            metricValue=1.0, 
+                                            metricType='counter', metricAction='inc',
+                                            metricValue=1.0,
                                             metricLabels={
                                                         "diameter_application_id": 16777238,
                                                         "diameter_cmd_code": 272,
-                                                        "event": ("Missing AVP" if missing_mandatory_avp else "Unknown User"),
+                                                        "event": event_label,
                                                         "imsi_prefix": str(imsi)[0:6]},
                                             metricHelp='Diameter Authentication related Counters',
                                             metricExpiry=60,
-                                            usePrefix=True, 
-                                            prefixHostname=self.hostname, 
+                                            usePrefix=True,
+                                            prefixHostname=self.hostname,
                                             prefixServiceName='metric')
             if session_id is not None and len(avp) == 0:
                 avp += self.generate_avp(263, 40, session_id)
                 avp += self.generate_avp(264, 40, self.OriginHost)
                 avp += self.generate_avp(296, 40, self.OriginRealm)
                 avp += self.generate_avp(258, 40, "01000016")
-            avp += self.generate_avp(268, 40, self.int_to_hex((5005 if missing_mandatory_avp else 5030), 4))
+            avp += self.generate_avp(268, 40, self.int_to_hex(result_code, 4))
             response = self.generate_diameter_packet("01", "40", 272, 16777238, packet_vars['hop-by-hop-identifier'], packet_vars['end-to-end-identifier'], avp)     #Generate Diameter packet
         return response
 

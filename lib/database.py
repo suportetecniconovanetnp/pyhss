@@ -2234,11 +2234,18 @@ class Database:
             self.logTool.log(service='Database', level='debug', message=E, redisClient=self.redisMessaging)
             self.safe_close(session)
             raise ValueError(E)
+
+        # .first() returns None when the subscriber has no active session for this APN.
+        # That is a normal result, not an error - callers already guard with "if serving_apn:".
+        if result is None:
+            self.safe_close(session)
+            return None
+
         result = result.__dict__
         result.pop('_sa_instance_state')
-        
+
         self.safe_close(session)
-        return result   
+        return result
 
     def Get_Serving_APNs(self, subscriber_id: int) -> dict:
         """
@@ -2288,11 +2295,16 @@ class Database:
             self.logTool.log(service='Database', level='debug', message=E, redisClient=self.redisMessaging)
             self.safe_close(session)
             raise ValueError(E)
+
+        if result is None:
+            self.safe_close(session)
+            return None
+
         result = result.__dict__
         result.pop('_sa_instance_state')
-        
+
         self.safe_close(session)
-        return result   
+        return result
 
     def Get_Charging_Rule(self, charging_rule_id):
         self.logTool.log(service='Database', level='debug', message="Called Get_Charging_Rule() for  charging_rule_id " + str(charging_rule_id), redisClient=self.redisMessaging)

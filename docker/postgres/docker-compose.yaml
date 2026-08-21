@@ -1,0 +1,38 @@
+# Standalone PostgreSQL stack for PyHSS.
+#
+# Deployed independently from the main PyHSS stack (docker/docker-compose.yaml)
+# so the database can be provisioned, backed up, and redeployed without
+# touching the running PyHSS containers. Both stacks join the `pyhss_shared`
+# network created here so the PyHSS services can reach this container by name.
+#
+# Deploy this stack first. Then, when ready to cut PyHSS over to it, attach
+# the pyhss_shared network to the PyHSS stack (see docker/docker-compose.yaml)
+# and point DATABASE_SERVER at `pyhss_postgres` (this container's name) in
+# docker/.env.
+
+networks:
+  pyhss_shared:
+    name: pyhss_shared
+
+volumes:
+  pyhss_postgres_data:
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: pyhss_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in docker/postgres/.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in docker/postgres/.env}
+      POSTGRES_DB: ${POSTGRES_DB:-hss}
+    volumes:
+      - pyhss_postgres_data:/var/lib/postgresql/data
+    networks:
+      - pyhss_shared
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s

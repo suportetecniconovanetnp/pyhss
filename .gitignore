@@ -34,3 +34,4 @@ pyhss.egg-info
 tests/.pyhss*.db
 .venv
 hss.db
+docker/postgres/.env

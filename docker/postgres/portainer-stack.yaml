@@ -11,7 +11,8 @@
 #
 # This is a separate stack from the PyHSS app stack on purpose: it can be
 # redeployed, updated, or backed up independently without touching the
-# running pyhss_api/diameter/hss/gsup containers. It creates a pyhss_shared
+# running pyhss_api/hss/gsup containers (pyhss_diameter doesn't talk to the
+# database and doesn't need this network at all). It creates a pyhss_shared
 # Docker network; when you're ready to cut PyHSS over to Postgres, attach
 # that network to the PyHSS stack too (see docker/docker-compose.postgres.yaml)
 # and point DATABASE_SERVER at `pyhss_postgres` (this container's name) with

@@ -15,6 +15,11 @@
 # This only adds network access to the pyhss_shared network created by the
 # postgres stack; it does not change DATABASE_TYPE - that still comes from
 # docker/.env.
+#
+# pyhss_diameter is deliberately NOT attached here: it only handles the
+# Diameter socket and talks to the other services over Redis - it never
+# opens its own Database() connection (only hssService, apiService and
+# gsupService do), so it has no need to reach Postgres.
 
 networks:
   pyhss_shared:
@@ -22,11 +27,6 @@ networks:
 
 services:
   pyhss_api:
-    networks:
-      - default
-      - pyhss_shared
-
-  pyhss_diameter:
     networks:
       - default
       - pyhss_shared

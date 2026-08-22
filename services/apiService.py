@@ -7,7 +7,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import sys
 import json
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, redirect
 from flask_restx import Api, Resource, fields, reqparse, abort
 from werkzeug.middleware.proxy_fix import ProxyFix
 from functools import wraps
@@ -24,6 +24,7 @@ from logtool import LogTool
 from diameter import Diameter
 from messaging import RedisMessaging
 from baseModels import SubscriberInfo
+from version import pyhss_version
 import database
 from pyhss_config import config
 
@@ -63,6 +64,10 @@ databaseClient = database.Database(logTool=logTool, redisMessaging=redisMessagin
 
 apiService = Flask(__name__)
 
+@apiService.route("/")
+def PyHSS_API_redirect_to_docs():
+    return redirect("/docs/")
+
 APN = database.APN
 Serving_APN = database.SERVING_APN
 AUC = database.AUC
@@ -81,9 +86,12 @@ EMERGENCY_SUBSCRIBER = database.EMERGENCY_SUBSCRIBER
 
 
 apiService.wsgi_app = ProxyFix(apiService.wsgi_app)
-api = Api(apiService, version='1.0', title=f'{siteName + " - " if siteName else ""}{originHostname} - PyHSS OAM API',
-    description='Restful API for working with PyHSS',
-    doc='/docs/'
+api = Api(
+    apiService,
+    version=pyhss_version,
+    title=f"{siteName + ' - ' if siteName else ''}{originHostname} - PyHSS OAM API",
+    description="Restful API for working with PyHSS",
+    doc="/docs/",
 )
 
 ns_apn = api.namespace('apn', description='PyHSS APN Functions')
@@ -258,7 +266,12 @@ def auth_required(f):
     return decorated_function
 
 def auth_before_request():
-    if request.path.startswith('/docs') or request.path.startswith('/swagger') or request.path.startswith('/metrics'):
+    if (
+        request.path.startswith("/docs")
+        or request.path.startswith("/swagger")
+        or request.path.startswith("/metrics")
+        or request.path == "/"
+    ):
         return None
     if request.method == "OPTIONS":
         res = Response()

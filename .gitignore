@@ -36,3 +36,4 @@ tests/.pyhss*.db
 .venv
 hss.db
 docker/postgres/.env
+debian/deps

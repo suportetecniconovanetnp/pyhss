@@ -13,10 +13,10 @@ jobs:
           - "3.14"
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
         python-version: ${{ matrix.python-version }}
 
@@ -33,10 +33,12 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         # psycopg2-binary (needed by test_database_upgrade_postgresql.py) is
-        # already pulled in via requirements.txt.
+        # already pulled in via requirements.txt. mysqlclient is only needed
+        # for test_database_upgrade_mariadb.py and isn't a runtime dependency.
         pip install \
           -r requirements.txt \
-          -r requirements-test.txt
+          -r requirements-test.txt \
+          mysqlclient
 
     - name: Run PyHSS tests
       run: |

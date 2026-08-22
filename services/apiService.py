@@ -2550,7 +2550,9 @@ class PyHSS_Push_CLR(Resource):
 
 
 def main():
-    apiService.run(debug=False, host='0.0.0.0', port=8080)
+    bind_ip = config.get('api', {}).get('bind_ip', '0.0.0.0')
+    bind_port = config.get('api', {}).get('bind_port', 8080)
+    apiService.run(debug=False, host=bind_ip, port=bind_port)
 
 
 if __name__ == '__main__':

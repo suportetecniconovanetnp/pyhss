@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Building PyHSS with `python3 -m build` and as debian package.
 - RAT restriction checking for subscribers.
 - Automatic database upgrades (from 1.0.1 or higher).
+- `api.bind_ip` / `api.bind_port` config keys (env: `API_BIND_IP`, `API_BIND_PORT`)
+  to bind apiService to a specific address instead of always `0.0.0.0:8080`.
 
 ### Changed
 

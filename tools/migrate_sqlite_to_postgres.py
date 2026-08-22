@@ -5,15 +5,22 @@
 schema-provisioned PostgreSQL database.
 
 Usage:
-    PYHSS_CONFIG=/path/to/postgres_config.yaml PYTHONPATH=lib \
-        python3 tools/migrate_sqlite_to_postgres.py /path/to/hss_snapshot.db
+    python3 tools/migrate_sqlite_to_postgres.py /path/to/hss_snapshot.db
+
+Meant to be run inside a PyHSS container that is already configured against
+the target Postgres database (its generated /opt/pyhss/config.yaml is used
+automatically, same as any other PyHSS service). To run against a different
+config, set PYHSS_CONFIG to point at it.
 
 The destination database must already have the PyHSS schema created (run any
 PyHSS service with main_service=True against the target database once, or
 just instantiate database.Database(..., main_service=True)).
 """
+import os
 import sys
 import sqlite3
+
+sys.path.append(os.path.realpath(os.path.dirname(__file__) + "/../lib"))
 
 import sqlalchemy
 from sqlalchemy.exc import IntegrityError

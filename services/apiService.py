@@ -323,7 +323,7 @@ def handle_exception(e):
         return response_json, 500
 
 
-def send_clr_and_log_result(imsi, serving_mme, serving_mme_realm, serving_mme_peer, cancellation_type, immediate_reattach, context, timeout=1.0):
+def send_clr_and_log_result(imsi, serving_mme, serving_mme_realm, serving_mme_peer, cancellation_type, immediate_reattach, context, timeout=3.0):
     logTool.log(
         service='API',
         level='info',
@@ -382,7 +382,7 @@ def send_clr_and_log_result(imsi, serving_mme, serving_mme_realm, serving_mme_pe
         return diameter_response, None
 
 
-def send_isd_and_log_result(imsi, serving_mme, serving_mme_realm, serving_mme_peer, context, timeout=1.0):
+def send_isd_and_log_result(imsi, serving_mme, serving_mme_realm, serving_mme_peer, context, timeout=3.0):
     logTool.log(
         service='API',
         level='info',

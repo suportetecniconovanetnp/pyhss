@@ -10,7 +10,7 @@ import os
 import random
 import ipaddress
 import jinja2
-from database import Database, ROAMING_NETWORK, ROAMING_RULE, EMERGENCY_SUBSCRIBER
+from database import Database, ROAMING_NETWORK, ROAMING_RULE, EMERGENCY_SUBSCRIBER, IMS_SUBSCRIBER
 from messaging import RedisMessaging
 from redis import Redis
 import datetime
@@ -131,6 +131,13 @@ class Diameter:
                 {"commandCode": 320, "applicationId": 16777251, "requestMethod": self.Request_16777251_320, "failureResultCode": 5012 ,"requestAcronym": "DSR", "responseAcronym": "DSR", "requestName": "Delete Subscriber Data Request", "responseName": "Delete Subscriber Data Answer"}
 
         ]
+
+    @staticmethod
+    def get_unknown_imsi_reject_cause() -> int:
+        if config.get('hss', {}).get('roaming', {}).get('inbound', {}).get('reject_unknown_imsis_with', 'IMSI_UNKNOWN') == 'ROAMING_NOT_ALLOWED':
+            return 5004 # DIAMETER_ERROR_ROAMING_NOT_ALLOWED
+        return 5001 # DIAMETER_ERROR_USER_UNKNOWN
+
 
     #Generates rounding for calculating padding
     def myround(self, n, base=4):
@@ -259,15 +266,12 @@ class Diameter:
             return (binform)
 
     def TBCD_encode(self, input):
-        if input is None:
-            return ""
-        input = str(input)
-        if input.lower() == "none":
-            return ""
         self.logTool.log(service='HSS', level='debug', message="TBCD_encode input value is " + str(input), redisClient=self.redisMessaging)
         offset = 0
         output = ''
         matches = ['*', '#', 'a', 'b', 'c']
+        if not all(digit.isdigit() or digit in matches for digit in str(input)):
+            raise ValueError("TBCD_encode input contains non-TBCD characters: " + str(input))
         while offset < len(input):
             if len(input[offset:offset+2]) == 2:
                 self.logTool.log(service='HSS', level='debug', message="processing bits " + str(input[offset:offset+2]) + " at position offset " + str(offset), redisClient=self.redisMessaging)
@@ -2160,7 +2164,7 @@ class Diameter:
             if msisdn is None or msisdn == "":
                 self.logTool.log(service='HSS', level='warning', message="MSISDN missing for subscriber " + str(imsi) + " - using IMSI as fallback", redisClient=self.redisMessaging)
                 msisdn = str(imsi)
-            
+
             self.logTool.log(service='HSS', level='debug', message="MSISDN is " + str(msisdn) + " - adding in ULA", redisClient=self.redisMessaging)
             msisdn_avp = self.generate_vendor_avp(701, 'c0', 10415, self.TBCD_encode(str(msisdn)))                     #MSISDN
             self.logTool.log(service='HSS', level='debug', message=msisdn_avp, redisClient=self.redisMessaging)
@@ -2287,7 +2291,7 @@ class Diameter:
                                             usePrefix=True, 
                                             prefixHostname=self.hostname, 
                                             prefixServiceName='metric')
-            #Handle if the subscriber is not present in HSS return "DIAMETER_ERROR_USER_UNKNOWN"
+            #Handle if the subscriber is not present in HSS return the appropriate error
             self.logTool.log(service='HSS', level='debug', message="Subscriber " + str(imsi) + " is unknown in database", redisClient=self.redisMessaging)
             avp = ''
             session_id = self.get_avp_data(avps, 263)[0]                                                     #Get Session-ID
@@ -2298,7 +2302,7 @@ class Diameter:
             #Experimental Result AVP(Response Code for Failure)
             avp_experimental_result = ''
             avp_experimental_result += self.generate_vendor_avp(266, 40, 10415, '')                         #AVP Vendor ID
-            avp_experimental_result += self.generate_avp(298, 40, self.int_to_hex(5001, 4))                 #AVP Experimental-Result-Code: DIAMETER_ERROR_USER_UNKNOWN (5001)
+            avp_experimental_result += self.generate_avp(298, 40, self.int_to_hex(self.get_unknown_imsi_reject_cause(), 4))                 #AVP Experimental-Result-Code: DIAMETER_ERROR_USER_UNKNOWN (5001) or DIAMETER_ERROR_ROAMING_NOT_ALLOWED (5004)
             avp += self.generate_avp(297, 40, avp_experimental_result)                                      #AVP Experimental-Result(297)
             
             avp += self.generate_avp(277, 40, "00000001")                                                    #Auth-Session-State
@@ -2999,6 +3003,7 @@ class Diameter:
             remote_peer = OriginHost
         self.logTool.log(service='HSS', level='debug', message="[diameter.py] [Answer_16777216_300] [UAR] Remote Peer is " + str(remote_peer), redisClient=self.redisMessaging)
 
+        imsi = ""
         try:
             self.logTool.log(service='HSS', level='debug', message="Checking if username present", redisClient=self.redisMessaging)
             username = self.get_avp_data(avps, 1)[0]                                                     
@@ -3622,7 +3627,7 @@ class Diameter:
         #Push updated User Data into IMS Backend
         #Start with the Current User Data
         subscriber_ims_details = self.database.Get_IMS_Subscriber(imsi=imsi)
-        self.database.UpdateObj(self.database.IMS_SUBSCRIBER, {'xcap_profile': sh_user_data}, subscriber_ims_details['ims_subscriber_id'])
+        self.database.UpdateObj(IMS_SUBSCRIBER, {'xcap_profile': sh_user_data}, subscriber_ims_details['ims_subscriber_id'])
 
         avp = ''                                                                                    #Initiate empty var AVP                                                                                           #Session-ID
         session_id = self.get_avp_data(avps, 263)[0]                                                     #Get Session-ID
@@ -3630,6 +3635,7 @@ class Diameter:
         avp += self.generate_avp(264, 40, self.OriginHost)                                               #Origin Host
         avp += self.generate_avp(296, 40, self.OriginRealm)                                              #Origin Realm
         avp += self.generate_avp(277, 40, "00000001")                                                    #Auth-Session-State (No state maintained)
+        avp += self.generate_avp(268, 40, "000007d1")                                                    #Result-Code (2001 SUCCESS)
         #AVP: Vendor-Specific-Application-Id(260) l=32 f=-M-
         VendorSpecificApplicationId = ''
         VendorSpecificApplicationId += self.generate_vendor_avp(266, 40, 10415, '')                     #AVP Vendor ID
@@ -4953,8 +4959,8 @@ class Diameter:
         #* [ Route-Record ]
         avp += self.generate_avp(282, "40", str(binascii.hexlify(b'localdomain'),'ascii'))
         
-        if "msisdn" in kwargs:
-            msisdn = kwargs['msisdn']
+        if kwargs.get("msisdn"):
+            msisdn = str(kwargs['msisdn'])
             msisdn = msisdn.replace('+', '')
             msisdn_avp = self.generate_vendor_avp(701, 'c0', 10415, self.TBCD_encode(str(msisdn)))                                             #MSISDN
             avp += self.generate_vendor_avp(700, "c0", 10415, msisdn_avp)                         #User-Identity
@@ -5027,8 +5033,8 @@ class Diameter:
             avp += self.generate_avp(1, 40, self.string_to_hex(str(kwargs.get('imsi'))))                                             #Username (IMSI)
         
         #MSISDN (Optional)
-        if 'msisdn' in kwargs:
-            avp += self.generate_vendor_avp(701, 'c0', 10415, self.TBCD_encode(str(kwargs.get('msisdn'))))                                             #Username (IMSI)
+        if kwargs.get('msisdn'):
+            avp += self.generate_vendor_avp(701, 'c0', 10415, self.TBCD_encode(str(kwargs.get('msisdn'))))                                             #MSISDN
 
         #GMLC Address
         avp += self.generate_vendor_avp(2405, 'c0', 10415, self.ip_to_hex('127.0.0.1'))                      #GMLC-Address

@@ -2,7 +2,8 @@
 # Copyright 2022-2025 Nick <nick@nickvsnetworking.com>
 # Copyright 2023-2025 David Kneipp <david@davidkneipp.com>
 # Copyright 2025 sysmocom - s.f.m.c. GmbH <info@sysmocom.de>
-# Copyright 2025 Lennart Rosam <hello@takuto.de>
+# Copyright 2025-2026 Lennart Rosam <hello@takuto.de>
+# Copyright 2025-2026 Alexander Couzens <lynxis@fe80.eu>
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import sys
 import json
@@ -2550,9 +2551,11 @@ class PyHSS_Push_CLR(Resource):
 
 
 def main():
-    bind_ip = config.get('api', {}).get('bind_ip', '0.0.0.0')
-    bind_port = config.get('api', {}).get('bind_port', 8080)
-    apiService.run(debug=False, host=bind_ip, port=bind_port)
+    config_api = config.get('api', {})
+    host = config_api.get('bind_ip', '127.0.0.1')
+    port = int(config_api.get('bind_port', 8080))
+
+    apiService.run(debug=False, host=host, port=port)
 
 
 if __name__ == '__main__':

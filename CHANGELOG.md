@@ -21,10 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Automatic database upgrades (from 1.0.1 or higher).
 - `api.bind_ip` / `api.bind_port` config keys (env: `API_BIND_IP`, `API_BIND_PORT`)
   to bind apiService to a specific address instead of always `0.0.0.0:8080`.
+- Allow users to configure `hss.roaming.inbound.reject_unknown_imsis_with` to either `IMSI_UNKNOWN` (default) or `ROAMING_NOT_ALLOWED`.
 
 ### Changed
 
 - Set the default database backend to SQLite.
+- Change the default bind IP from 0.0.0.0 to 127.0.0.1.
+- Raise minimum Python version from 3.9 to 3.11.
 
 ### Removed
 

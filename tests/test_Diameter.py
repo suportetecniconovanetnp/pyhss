@@ -61,3 +61,38 @@ class Diameter_Tests(unittest.TestCase):
             "length": 276,
             "packet_version": "01",
         }
+
+    def test_C_TBCD_encode_even_length(self):
+        self.assertEqual(self.__class__.diameter_inst.TBCD_encode("491701234567"), "947110325476")
+
+    def test_C_TBCD_encode_odd_length(self):
+        self.assertEqual(self.__class__.diameter_inst.TBCD_encode("4917012345678"), "947110325476f8")
+
+    def test_C_TBCD_encode_special_chars(self):
+        self.assertEqual(self.__class__.diameter_inst.TBCD_encode("123#"), "21b3")
+
+    def test_C_TBCD_encode_decode_roundtrip(self):
+        msisdn = "262423403000001"
+        encoded = self.__class__.diameter_inst.TBCD_encode(msisdn)
+        self.assertEqual(bytes.fromhex(encoded).hex(), encoded, "TBCD_encode must return valid hex")
+        self.assertEqual(self.__class__.diameter_inst.TBCD_decode(encoded), msisdn)
+
+    def test_C_TBCD_encode_rejects_non_tbcd_input(self):
+        # A subscriber without an MSISDN used to be encoded as str(None) == "None",
+        # embedding the non-hex text "oNen" in the outbound message and crashing
+        # bytes.fromhex() in diameterService.py.
+        for bad_input in (str(None), "12x4", "+491701234567"):
+            with self.assertRaises(ValueError, msg=f"TBCD_encode must reject {bad_input!r}"):
+                self.__class__.diameter_inst.TBCD_encode(bad_input)
+
+    def test_C_SLh_RIR_without_msisdn_is_valid_hex(self):
+        # msisdn=None must be treated as absent, not TBCD-encoded as "None"
+        for kwargs in ({"imsi": "505931111111116", "msisdn": None}, {"imsi": "505931111111116"}):
+            packet = self.__class__.diameter_inst.Request_16777291_8388622(**kwargs)
+            bytes.fromhex(packet)
+
+    def test_C_Sh_UDR_without_msisdn_is_valid_hex(self):
+        # msisdn=None must be treated as absent, not TBCD-encoded as "None"
+        for kwargs in ({"imsi": "505931111111116", "msisdn": None}, {"imsi": "505931111111116"}):
+            packet = self.__class__.diameter_inst.Request_16777217_306(**kwargs)
+            bytes.fromhex(packet)

@@ -2773,10 +2773,10 @@ class Diameter:
 
                 # Update Subscriber location information
                 try:
-                    default_eps_bearer_qos = self.get_avp_data(avps, 1049)[0]
-                    self.logTool.log(service='HSS', level='debug', message=f"[diameter.py] [Answer_16777238_272] [CCA] default_eps_bearer_qos: {default_eps_bearer_qos}", redisClient=self.redisMessaging)
-
-                    default_eps_bearer_3gpp_user_location_info = self.decode_3gpp_user_location_info(self.get_avp_data(default_eps_bearer_qos, 22)[0])
+                    # 3GPP-User-Location-Info (AVP 22) is sent by some PCEFs (e.g. Open5GS SMF)
+                    # as a top-level AVP alongside Default-EPS-Bearer-QoS (1049), not nested
+                    # inside it, despite Default-EPS-Bearer-QoS also being present in the CCR.
+                    default_eps_bearer_3gpp_user_location_info = self.decode_3gpp_user_location_info(self.get_avp_data(avps, 22)[0])
                     self.logTool.log(service='HSS', level='debug', message=f"[diameter.py] [Answer_16777238_272] [CCA] default_eps_bearer_3gpp_user_location_info: {default_eps_bearer_3gpp_user_location_info}", redisClient=self.redisMessaging)
 
                     last_seen_eci = default_eps_bearer_3gpp_user_location_info.get('ecgi', {}).get('eci', None)
@@ -2798,7 +2798,7 @@ class Diameter:
                                                             propagate=True)
 
                 except Exception as e:
-                    pass
+                    self.logTool.log(service='HSS', level='debug', message=f"[diameter.py] [Answer_16777238_272] [CCA] No 3GPP-User-Location-Info AVP present or failed to decode, skipping subscriber location update: {e}", redisClient=self.redisMessaging)
 
                 #Supported-Features(628) (Gx feature list)
                 avp += self.generate_vendor_avp(628, "80", 10415, "0000010a4000000c000028af0000027580000010000028af000000010000027680000010000028af0000000b")

@@ -22,7 +22,9 @@ class IPA(object):
     EXT = dict(CTRL=0, MGCP=1, LAC=2, SMSC=3, ORC=4, GSUP=5, OAP=6, RSPRO=7)
     # OpenBSC extension: SCCP_OLD
     MSGT = dict(PING=0x00, PONG=0x01, ID_GET=0x04, ID_RESP=0x05, ID_ACK=0x06, SCCP_OLD=0xFF)
-    _IDTAG = dict(SERNR=0, UNITNAME=1, LOCATION=2, TYPE=3, EQUIPVERS=4, SWVERSION=5, IPADDR=6, MACADDR=7, UNIT=8)
+    # Keep in sync with enum ipaccess_id_tags in osmocom/gsm/protocol/ipaccess.h
+    _IDTAG = dict(SERNR=0, UNITNAME=1, LOCATION1=2, LOCATION2=3, EQUIPVERS=4, SWVERSION=5, IPADDR=6, MACADDR=7,
+                  UNIT=8, USERNAME=9, PASSWORD=10, ACCESS_CLASS=11, APP_PROTO_VER=12)
     CTRL_GET = 'GET'
     CTRL_SET = 'SET'
     CTRL_REP = 'REPLY'
@@ -144,13 +146,13 @@ class IPA(object):
         """
         Make TAG for location
         """
-        return self._tag(self._IDTAG['LOCATION'], data)
+        return self._tag(self._IDTAG['LOCATION1'], data)
 
     def tag_type(self, data):
         """
         Make TAG for unit type
         """
-        return self._tag(self._IDTAG['TYPE'], data)
+        return self._tag(self._IDTAG['LOCATION2'], data)
 
     def tag_equip(self, data):
         """
@@ -195,7 +197,7 @@ class IPA(object):
         """
         encoded = bytearray()
         if id_tags is None:
-            id_tags = ['UNIT', 'MACADDR', 'TYPE', 'SWVERSION', 'LOCATION', 'UNITNAME']
+            id_tags = ['UNIT', 'MACADDR', 'LOCATION2', 'SWVERSION', 'LOCATION1', 'UNITNAME', 'SERNR']
 
         for tag in id_tags:
             if tag not in self._IDTAG:

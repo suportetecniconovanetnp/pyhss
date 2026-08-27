@@ -163,6 +163,9 @@ class GsupServer:
 
         await self.logger.logAsync(service='GSUP', level='WARN', message=f"Unimplemented message type: {message_type}")
 
+    # Binary-valued (not text) CCM identity tags per ipaccess_id_tags in osmocom/gsm/protocol/ipaccess.h
+    BINARY_IPA_TAGS = frozenset({'MACADDR', 'IPADDR'})
+
     async def __handle_ccm_identity_response(self, reader: StreamReader, writer: StreamWriter, peer_name: str,
                                              payload: bytes):
         tags = {}
@@ -170,14 +173,32 @@ class GsupServer:
         while index < len(payload):
             try:
                 length = int.from_bytes(payload[index:index + 2], 'big') - 1
-                tag = self.ipa.idtag(payload[index + 2:index + 3][0])
-                value = str(payload[index + 3:index + 3 + length], 'utf-8')
-                tags[tag] = value
-                index += 3 + length
+                tag_byte = payload[index + 2]
+                raw_value = payload[index + 3:index + 3 + length]
             except Exception as e:
                 await self.logger.logAsync(service='GSUP', level='ERROR',
-                                           message=f"Error parsing ID_RESP payload: {str(e)}")
-                writer.close()
+                                           message=f"Error parsing ID_RESP payload from {peer_name}: {str(e)}")
+                break
+
+            try:
+                tag = self.ipa.idtag(tag_byte)
+            except ValueError:
+                await self.logger.logAsync(service='GSUP', level='WARN',
+                                           message=f"Unknown ID tag {tag_byte:#04x} in ID_RESP from {peer_name}, skipping")
+                index += 3 + length
+                continue
+
+            if tag in self.BINARY_IPA_TAGS:
+                # e.g. MACADDR is often all-zero for software network elements (no real NIC);
+                # decoding it as UTF-8 text embeds NUL bytes, which breaks DB writes.
+                value = raw_value.hex(':')
+            else:
+                try:
+                    value = str(raw_value, 'utf-8')
+                except UnicodeDecodeError:
+                    value = raw_value.hex(':')
+            tags[tag] = value
+            index += 3 + length
 
         peer = IPAPeer(peer_name, tags, reader, writer)
         self.active_connections[peer_name] = peer

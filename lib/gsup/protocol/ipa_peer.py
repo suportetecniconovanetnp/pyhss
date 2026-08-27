@@ -13,9 +13,12 @@ class IPAPeerRole(IntEnum):
 
 class IPAPeer:
     SUPPORTED_IPA_TAGS = list(
-        ['SERNR', 'UNITNAME', 'LOCATION', 'TYPE', 'EQUIPVERS', 'SWVERSION', 'IPADDR', 'MACADDR', 'UNIT'])
-    _PRIMARY_ID_PREFERENCE = list(['MACADDR', 'UNIT'])
-    _ROLE_PREFERENCE_TAGS = list(['TYPE', 'UNIT', 'UNITNAME'])
+        ['SERNR', 'UNITNAME', 'LOCATION1', 'LOCATION2', 'EQUIPVERS', 'SWVERSION', 'IPADDR', 'MACADDR', 'UNIT'])
+    # SERNR (osmo-msc: net->msc_ipa_name) is explicitly configurable per instance, unlike UNIT
+    # (site/bts/trx id, usually left at the 0/0/0 default) or MACADDR (usually all-zero for
+    # software network elements without a real NIC).
+    _PRIMARY_ID_PREFERENCE = list(['SERNR', 'UNIT', 'MACADDR'])
+    _ROLE_PREFERENCE_TAGS = list(['LOCATION2', 'UNIT', 'UNITNAME'])
 
     def __init__(self, name: str, tags: dict, reader: StreamReader, writer: StreamWriter):
         self.name = name

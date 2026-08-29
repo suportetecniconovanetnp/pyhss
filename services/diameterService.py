@@ -59,7 +59,45 @@ class DiameterService:
         self.hostname = self.originHost
         self.useExternalSocketService = config.get('hss', {}).get('use_external_socket_service', False)
         self.diameterPeerKey = config.get('hss', {}).get('diameter_peer_key', 'diameterPeers')
-    
+        # Diagnostic watchdog: RedisMessagingAsync's blpop/blmpop have no socket
+        # timeout, so a half-dead connection to Redis blocks inboundDataWorker or
+        # writeOutboundData forever with no exception and no log line. These are
+        # updated on the hot path and reported by redisWatchdog() via plain
+        # stdout prints, bypassing LogTool (which itself writes to Redis and
+        # could block too), so the watchdog keeps reporting even while a worker
+        # is stuck.
+        self.redisWatchdogInterval = int(config.get('hss', {}).get('redis_watchdog_interval', 15))
+        self.lastInboundQueueActivity = time.monotonic()
+        self.outboundWaitStarted = {}
+
+    async def redisWatchdog(self):
+        """
+        Prints, on a fixed interval, how long it has been since inboundDataWorker
+        last pushed a batch to Redis successfully, the current sharedQueue depth,
+        and the longest-running outbound wait (writeOutboundData blocked on
+        awaitMessage for a given peer). A healthy service prints small, steady
+        numbers each tick. A climbing inbound age or outbound wait past
+        redisWatchdogInterval means a coroutine is stuck inside a blocking Redis
+        call (see comment on lastInboundQueueActivity above).
+        """
+        while True:
+            await(asyncio.sleep(self.redisWatchdogInterval))
+            now = time.monotonic()
+            inboundAge = now - self.lastInboundQueueActivity
+            queueDepth = self.sharedQueue.qsize() if hasattr(self, 'sharedQueue') else 0
+            queueMax = self.sharedQueue.maxsize if hasattr(self, 'sharedQueue') else 0
+            oldestOutbound = None
+            if self.outboundWaitStarted:
+                oldestKey = min(self.outboundWaitStarted, key=self.outboundWaitStarted.get)
+                oldestOutbound = (oldestKey, now - self.outboundWaitStarted[oldestKey])
+            timestamp = datetime.now().strftime("%m/%d/%Y %H:%M:%S")
+            status = "OK" if inboundAge < self.redisWatchdogInterval * 2 else "STALLED?"
+            message = f"[{timestamp}] [WATCHDOG] [Diameter] Last inbound Redis push was {inboundAge:.1f}s ago ({status}), sharedQueue {queueDepth}/{queueMax}"
+            if oldestOutbound:
+                outboundStatus = "OK" if oldestOutbound[1] < self.redisWatchdogInterval * 2 else "STALLED?"
+                message += f", oldest pending outbound wait: {oldestOutbound[0]} for {oldestOutbound[1]:.1f}s ({outboundStatus})"
+            print(message, flush=True)
+
     async def validateDiameterInbound(self, clientAddress: str, clientPort: str, inboundData) -> bool:
         """
         Asynchronously validates a given diameter inbound, and increments the 'Number of Diameter Inbounds' metric.
@@ -299,6 +337,7 @@ class DiameterService:
 
                 if messageList:
                     await self.redisReaderMessaging.sendBulkMessage(queue=inboundQueueName, messageList=messageList, queueExpiry=self.diameterRequestTimeout, usePrefix=True, prefixHostname=self.hostname, prefixServiceName='diameter')
+                    self.lastInboundQueueActivity = time.monotonic()
                     messageList = []
 
             except Exception as e:
@@ -310,10 +349,13 @@ class DiameterService:
         Waits for a message to be received from Redis, then sends to the connected client.
         """
         await(self.logTool.logAsync(service='Diameter', level='debug', message=f"[Diameter] [writeOutboundData] [{coroutineUuid}] writeOutboundData with host {clientAddress} on port {clientPort}"))
+        waitKey = f"{clientAddress}-{clientPort}"
         while not writer.transport.is_closing():
             try:
                 await(self.logTool.logAsync(service='Diameter', level='debug', message=f"[Diameter] [writeOutboundData] [{coroutineUuid}] Waiting for messages for host {clientAddress} on port {clientPort}"))
+                self.outboundWaitStarted[waitKey] = time.monotonic()
                 pendingOutboundMessage = (await(self.redisWriterMessaging.awaitMessage(key=f"diameter-outbound-{clientAddress}-{clientPort}", usePrefix=True, prefixHostname=self.hostname, prefixServiceName='diameter')))[1]
+                self.outboundWaitStarted.pop(waitKey, None)
                 outboundData = OutboundData.model_validate(pydantic_core.from_json(pendingOutboundMessage))
                 diameterOutboundBinary = bytes.fromhex(outboundData.OutboundHex)
                 await(self.logTool.logAsync(service='Diameter', level='debug', message=f"[Diameter] [writeOutboundData] [{coroutineUuid}] Sending: {diameterOutboundBinary.hex()} to to {clientAddress} on {clientPort}."))
@@ -323,6 +365,7 @@ class DiameterService:
                 if self.benchmarking:
                     self.diameterResponses += 1
             except Exception as e:
+                self.outboundWaitStarted.pop(waitKey, None)
                 await(self.logTool.logAsync(service='Diameter', level='info', message=f"[Diameter] [writeOutboundData] [{coroutineUuid}] Connection closed for {clientAddress} on port {clientPort}, closing writer.{traceback.format_exc()}"))
                 return False
 
@@ -400,6 +443,8 @@ class DiameterService:
         """
 
         self.sharedQueue = asyncio.Queue(maxsize=1024)
+
+        redisWatchdogTask = asyncio.create_task(self.redisWatchdog())
 
         if self.enableOutboundDwr:
             handleOutboundDwrTask = asyncio.create_task(self.handleOutboundDwr())

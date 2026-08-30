@@ -360,14 +360,8 @@ class DiameterService:
             try:
                 await(self.logTool.logAsync(service='Diameter', level='debug', message=f"[Diameter] [writeOutboundData] [{coroutineUuid}] Waiting for messages for host {clientAddress} on port {clientPort}"))
                 self.outboundWaitStarted[waitKey] = time.monotonic()
-                try:
-                    pendingOutboundMessage = (await(self.redisWriterMessaging.awaitMessage(key=f"diameter-outbound-{clientAddress}-{clientPort}", usePrefix=True, prefixHostname=self.hostname, prefixServiceName='diameter')))[1]
-                finally:
-                    # Runs even on asyncio.CancelledError (e.g. the read side of
-                    # this connection closed first and this coroutine got
-                    # cancelled while awaiting), which does not derive from
-                    # Exception and would otherwise leak this entry forever.
-                    self.outboundWaitStarted.pop(waitKey, None)
+                pendingOutboundMessage = (await(self.redisWriterMessaging.awaitMessage(key=f"diameter-outbound-{clientAddress}-{clientPort}", usePrefix=True, prefixHostname=self.hostname, prefixServiceName='diameter')))[1]
+                self.outboundWaitStarted.pop(waitKey, None)
                 outboundData = OutboundData.model_validate(pydantic_core.from_json(pendingOutboundMessage))
                 diameterOutboundBinary = bytes.fromhex(outboundData.OutboundHex)
                 await(self.logTool.logAsync(service='Diameter', level='debug', message=f"[Diameter] [writeOutboundData] [{coroutineUuid}] Sending: {diameterOutboundBinary.hex()} to to {clientAddress} on {clientPort}."))
@@ -377,6 +371,7 @@ class DiameterService:
                 if self.benchmarking:
                     self.diameterResponses += 1
             except Exception as e:
+                self.outboundWaitStarted.pop(waitKey, None)
                 await(self.logTool.logAsync(service='Diameter', level='info', message=f"[Diameter] [writeOutboundData] [{coroutineUuid}] Connection closed for {clientAddress} on port {clientPort}, closing writer.{traceback.format_exc()}"))
                 return False
 

@@ -73,12 +73,19 @@ class DiameterService:
     async def redisWatchdog(self):
         """
         Prints, on a fixed interval, how long it has been since inboundDataWorker
-        last pushed a batch to Redis successfully, the current sharedQueue depth,
-        and the longest-running outbound wait (writeOutboundData blocked on
-        awaitMessage for a given peer). A healthy service prints small, steady
-        numbers each tick. A climbing inbound age or outbound wait past
-        redisWatchdogInterval means a coroutine is stuck inside a blocking Redis
-        call (see comment on lastInboundQueueActivity above).
+        last pushed a batch to Redis successfully and the current sharedQueue
+        depth. A healthy service prints small, steady numbers each tick. A
+        climbing inbound age means a worker is stuck inside a blocking Redis
+        call (see comment on lastInboundQueueActivity above) - inbound traffic
+        is shared across all peers, so this can't go quiet just because one
+        peer is idle.
+
+        The oldest pending per-peer outbound wait is also printed, but only as
+        a raw number with no OK/STALLED verdict: writeOutboundData blocks on
+        purpose until there is something to send to that specific peer, so a
+        large number here is completely normal for a peer that simply hasn't
+        needed a response in a while, and on its own is not evidence of a
+        stuck connection.
         """
         while True:
             await(asyncio.sleep(self.redisWatchdogInterval))
@@ -94,8 +101,7 @@ class DiameterService:
             status = "OK" if inboundAge < self.redisWatchdogInterval * 2 else "STALLED?"
             message = f"[{timestamp}] [WATCHDOG] [Diameter] Last inbound Redis push was {inboundAge:.1f}s ago ({status}), sharedQueue {queueDepth}/{queueMax}"
             if oldestOutbound:
-                outboundStatus = "OK" if oldestOutbound[1] < self.redisWatchdogInterval * 2 else "STALLED?"
-                message += f", oldest pending outbound wait: {oldestOutbound[0]} for {oldestOutbound[1]:.1f}s ({outboundStatus})"
+                message += f", oldest pending outbound wait (peer may simply be idle): {oldestOutbound[0]} for {oldestOutbound[1]:.1f}s"
             print(message, flush=True)
 
     async def validateDiameterInbound(self, clientAddress: str, clientPort: str, inboundData) -> bool:

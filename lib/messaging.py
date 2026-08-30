@@ -131,7 +131,6 @@ class RedisMessaging:
             message =  self.redisClient.blpop(key)
             return tuple(data.decode() for data in message)
         except Exception as e:
-            print(f"[messaging] awaitMessage exception on key {key}: {traceback.format_exc()}", flush=True)
             return ''
 
     def awaitBulkMessage(self, key: str, count: int=100, usePrefix: bool=False, prefixHostname: str='unknown', prefixServiceName: str='common'):

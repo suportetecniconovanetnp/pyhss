@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 # Copyright 2023-2025 David Kneipp <david@davidkneipp.com>
 # SPDX-License-Identifier: AGPL-3.0-or-later
-import os, sys, json, time, traceback, socket, threading
-from datetime import datetime
+import os, sys, json, time, traceback, socket
 
 sys.path.append(os.path.realpath(os.path.dirname(__file__) + "/../lib"))
 
@@ -49,15 +48,6 @@ class HssService:
         self.peerCacheInterval = int(config.get('hss', {}).get('peer_cache_interval', 5))
         self.peerCache = {}
         self.lastPeerCacheRefresh = 0.0
-        # Diagnostic watchdog: the redis-py client used by awaitBulkMessage has
-        # no socket timeout, so a half-dead connection to Redis blocks handleQueue
-        # forever with no exception and no log line. This reports how long it has
-        # been since the last successful read via plain stdout prints, bypassing
-        # LogTool (which itself writes to Redis and could block too) so the
-        # watchdog keeps reporting even while handleQueue is stuck.
-        self.redisWatchdogInterval = int(config.get('hss', {}).get('redis_watchdog_interval', 15))
-        self.lastQueueActivity = time.monotonic()
-        threading.Thread(target=self.redisWatchdog, daemon=True).start()
 
     def getPeerHostname(self, senderIp: str, senderPort: str):
         """
@@ -102,21 +92,6 @@ class HssService:
         except Exception as e:
             self.logTool.log(service='HSS', level='error', message=f"[HSS] [clearExpiredEmergencySubscribers] Exception: {traceback.format_exc()}", redisClient=self.redisMessaging)
 
-    def redisWatchdog(self):
-        """
-        Prints, on a fixed interval, how long it has been since handleQueue last
-        got data back from Redis. A healthy service prints a small, steady age
-        each tick. If the age keeps climbing past redisWatchdogInterval, the
-        process is stuck inside the blocking Redis read (see comment on
-        lastQueueActivity above), which otherwise fails completely silently.
-        """
-        while True:
-            time.sleep(self.redisWatchdogInterval)
-            age = time.monotonic() - self.lastQueueActivity
-            timestamp = datetime.now().strftime("%m/%d/%Y %H:%M:%S")
-            status = "OK" if age < self.redisWatchdogInterval * 2 else "STALLED?"
-            print(f"[{timestamp}] [WATCHDOG] [HSS] Last successful Redis read was {age:.1f}s ago ({status})", flush=True)
-
     def handleQueue(self):
         """
         Gets and parses inbound diameter requests, processes them and queues the response.
@@ -127,7 +102,6 @@ class HssService:
                     startTime = time.perf_counter()
 
                 inboundMessageList = self.redisMessaging.awaitBulkMessage(key='diameter-inbound', usePrefix=True, prefixHostname=self.hostname, prefixServiceName='diameter')
-                self.lastQueueActivity = time.monotonic()
 
                 if inboundMessageList == None:
                     continue

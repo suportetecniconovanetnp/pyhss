@@ -20,10 +20,16 @@ from logtool import LogTool
 from pyhss_config import config
 
 
+redisHost = config.get('redis', {}).get('host', '127.0.0.1')
+redisPort = int(config.get('redis', {}).get('port', 6379))
+redisUseUnixSocket = config.get('redis', {}).get('useUnixSocket', False)
+redisUnixSocketPath = config.get('redis', {}).get('unixSocketPath', '/var/run/redis/redis-server.sock')
+
+
 class MetricService:
 
-    def __init__(self, redisHost: str='127.0.0.1', redisPort: int=6379):
-        self.redisMessaging = RedisMessaging(host=redisHost, port=redisPort)
+    def __init__(self, redisHost: str=redisHost, redisPort: int=redisPort, redisUseUnixSocket: bool=redisUseUnixSocket, redisUnixSocketPath: str=redisUnixSocketPath):
+        self.redisMessaging = RedisMessaging(host=redisHost, port=redisPort, useUnixSocket=redisUseUnixSocket, unixSocketPath=redisUnixSocketPath)
         self.banners = Banners()
         self.logTool = LogTool(config=config)
         self.registry = CollectorRegistry(auto_describe=True)

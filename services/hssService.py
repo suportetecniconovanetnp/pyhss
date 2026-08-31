@@ -45,6 +45,8 @@ class HssService:
         # Housekeeping and peer lookups are kept out of the per-message hot path.
         self.emergencySubscriberCleanupInterval = int(config.get('hss', {}).get('emergency_subscriber_cleanup_interval', 60))
         self.lastEmergencySubscriberCleanup = 0.0
+        self.promStatsInterval = int(config.get('hss', {}).get('prom_stats_interval', 60))
+        self.lastPromStatsGeneration = 0.0
         self.peerCacheInterval = int(config.get('hss', {}).get('peer_cache_interval', 5))
         self.peerCache = {}
         self.lastPeerCacheRefresh = 0.0
@@ -91,6 +93,24 @@ class HssService:
             self.diameterLibrary.clear_expired_emergency_subscribers()
         except Exception as e:
             self.logTool.log(service='HSS', level='error', message=f"[HSS] [clearExpiredEmergencySubscribers] Exception: {traceback.format_exc()}", redisClient=self.redisMessaging)
+
+    def generatePromStats(self) -> None:
+        """
+        Runs the IMS/MME/PCRF subscriber count Prometheus stats generation at
+        most once every promStatsInterval seconds.
+
+        This scans the subscriber tables, so running it once per processed
+        diameter message would serialise a full table scan in front of every
+        request.
+        """
+        now = time.monotonic()
+        if now - self.lastPromStatsGeneration < self.promStatsInterval:
+            return
+        self.lastPromStatsGeneration = now
+        try:
+            self.diameterLibrary.Generate_Prom_Stats()
+        except Exception as e:
+            self.logTool.log(service='HSS', level='error', message=f"[HSS] [generatePromStats] Exception: {traceback.format_exc()}", redisClient=self.redisMessaging)
 
     def handleQueue(self):
         """
@@ -194,6 +214,7 @@ class HssService:
                 # Periodic housekeeping, once per batch at most, after the
                 # responses for this batch have already been queued.
                 self.clearExpiredEmergencySubscribers()
+                self.generatePromStats()
 
             except Exception as e:
                 self.logTool.log(service='HSS', level='error', message=f"[HSS] [handleQueue] Exception: {traceback.format_exc()}", redisClient=self.redisMessaging)

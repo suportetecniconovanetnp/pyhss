@@ -121,6 +121,8 @@ class MetricService:
 
         except Exception as e:
             self.logTool.log(service='Metric', level='error', message=f"[Metric] [handleMetrics] Unable to parse message: {metric}, due to {e}. Skipping.", redisClient=self.redisMessaging)
+            if not metric:
+                time.sleep(1)
             return
 
 

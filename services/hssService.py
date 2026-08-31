@@ -131,8 +131,7 @@ class HssService:
                                             "host": peerHostname},
                                             metricValue=float(1), metricHelp='Number of Diameter Requests Recieved per Host',
                                             metricExpiry=60,
-                                            usePrefix=True,
-                                            prefixHostname=self.hostname,
+                                            usePrefix=False,
                                             prefixServiceName='metric')
 
                         except Exception as e:
@@ -185,8 +184,7 @@ class HssService:
                                             "host": peerHostname},
                                             metricValue=float(1), metricHelp='Number of Diameter Responses Sent per Host',
                                             metricExpiry=60,
-                                            usePrefix=True,
-                                            prefixHostname=self.hostname,
+                                            usePrefix=False,
                                             prefixServiceName='metric')
 
                         except Exception as e:

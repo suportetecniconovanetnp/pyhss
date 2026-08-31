@@ -2675,8 +2675,7 @@ class Database:
                                                                 'device_type': device_info['name'],
                                                                 'device_name': device_info['model']},
                                                 metricExpiry=60,
-                                                usePrefix=True, 
-                                                prefixHostname=self.hostname, 
+                                                usePrefix=False, 
                                                 prefixServiceName='metric')
             except Exception as E:
                 self.logTool.log(service='Database', level='debug', message="Failed to get device info from TAC", redisClient=self.redisMessaging)
@@ -2687,8 +2686,7 @@ class Database:
                                             'device_type': 'Unknown',
                                             'device_name': 'Unknown'},
                             metricExpiry=60,
-                            usePrefix=True, 
-                            prefixHostname=self.hostname, 
+                            usePrefix=False, 
                             prefixServiceName='metric')
         else:
             self.logTool.log(service='Database', level='debug', message="No TAC database configured, skipping device info lookup", redisClient=self.redisMessaging)

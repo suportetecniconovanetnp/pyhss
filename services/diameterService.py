@@ -194,8 +194,7 @@ class DiameterService:
                                     metricLabels={'host': peerHost},
                                     metricValue=1.0, metricHelp='Connection state of diameter peers',
                                     metricExpiry=60,
-                                    usePrefix=True,
-                                    prefixHostname=self.hostname, 
+                                    usePrefix=False,
                                     prefixServiceName='metric'))
                         else:
                             await(self.redisPeerLogMessaging.sendMetric(serviceName='diameter', metricName='prom_diam_connected_state',
@@ -203,8 +202,7 @@ class DiameterService:
                                     metricLabels={'host': peerHost},
                                     metricValue=0.0, metricHelp='Connection state of diameter peers',
                                     metricExpiry=60,
-                                    usePrefix=True,
-                                    prefixHostname=self.hostname, 
+                                    usePrefix=False,
                                     prefixServiceName='metric'))
         except Exception as e:
             await(self.logTool.logAsync(service='Diameter', level='info', message=f"[Diameter] [logActivePeers] Exception: {traceback.format_exc()}"))
@@ -227,16 +225,14 @@ class DiameterService:
                                             metricLabels={'benchmark_interval': self.benchmarkingInterval},
                                             metricHelp='Number of Diameter Requests Received',
                                             metricExpiry=60,
-                                            usePrefix=True, 
-                                            prefixHostname=self.hostname,
+                                            usePrefix=False, 
                                             prefixServiceName='metric'))
             await(self.redisMetricMessaging.sendMetric(serviceName='diameter', metricName='prom_diam_response_count',
                                             metricType='gauge', metricAction='inc',
                                             metricLabels={'benchmark_interval': self.benchmarkingInterval},
                                             metricValue=float(self.diameterResponses), metricHelp='Number of Diameter Responses Sent',
                                             metricExpiry=60, 
-                                            usePrefix=True,
-                                            prefixHostname=self.hostname, 
+                                            usePrefix=False,
                                             prefixServiceName='metric'))
             self.diameterRequests = 0
             self.diameterResponses = 0

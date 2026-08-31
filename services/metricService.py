@@ -68,6 +68,7 @@ class MetricService:
         """
         Collects queued metrics from redis, and exposes them using prometheus_client.
         """
+        metric = None
         try:
             actions = {'inc': 'inc', 'dec': 'dec', 'set':'set'}
             prometheusTypes = {'counter': Counter, 'gauge': Gauge, 'histogram': Histogram, 'summary': Summary}

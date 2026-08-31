@@ -94,6 +94,7 @@ class MetricService:
                 counterValue = float(prometheusJson['VALUE'])
                 counterHelp = prometheusJson.get('HELP', '')
                 counterLabels = prometheusJson.get('LABELS', {})
+                counterServiceName = prometheusJson.get('serviceName', 'unknown')
 
                 try:
                     metricInflux = prometheusJson.get('INFLUX', {})
@@ -104,6 +105,7 @@ class MetricService:
 
                 if isinstance(counterLabels, list):
                             counterLabels = dict()
+                counterLabels = {**counterLabels, 'service': counterServiceName}
 
                 if counterType is not None:
                     try:

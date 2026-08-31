@@ -43,7 +43,7 @@ case "${CONTAINER_ROLE}" in
         exec python3 logService.py
         ;;
     metrics)
-        exec python3 metricsService.py
+        exec python3 metricService.py
         ;;
     api)
         exec python3 apiService.py

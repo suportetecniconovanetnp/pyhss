@@ -87,8 +87,9 @@ class DiameterService:
         while True:
             try:
                 outboundDwrEncoded = await(self.diameterLibrary.Request_280(originHost=self.originHost, originRealm=self.originRealm))
-                activePeersCached = self.activePeers
-                for activePeerKey, activePeerValue in activePeersCached.items():
+                # Iterate over a snapshot: handleConnection() and handleActiveDiameterPeers() may add or
+                # remove peers while this loop is awaiting sendMessage() (#310)
+                for activePeerKey, activePeerValue in list(self.activePeers.items()):
 
                     isConnected = activePeerValue.Connected
                     peerIp = activePeerValue.IpAddress
@@ -127,7 +128,7 @@ class DiameterService:
 
                 activeDiameterPeersTimeout = config.get('hss', {}).get('active_diameter_peers_timeout', 3600)
 
-                activePeers = self.activePeers
+                activePeers = dict(self.activePeers)
                 stalePeers = []
                 diameterHosts = {}
 
@@ -162,8 +163,10 @@ class DiameterService:
                         await(self.logTool.logAsync(service='Diameter', level='warning', message=f"[Diameter] [handleActiveDiameterPeers] Error removing stale peer: {traceback.format_exc()}"))
                     await(self.logActivePeers())
                 
-                #Marshal the Peer objects and store in Redis
-                for peerKey, peer in activePeers.items():
+                #Marshal the Peer objects and store in Redis. Take a new snapshot, so that peers pruned
+                #above are not written back and peers that connect while awaiting setHashValue() don't
+                #change the size of the dict being iterated (#310)
+                for peerKey, peer in list(self.activePeers.items()):
                     await(self.redisPeerMessaging.setHashValue(name=self.diameterPeerKey, key=peerKey, value=peer.model_dump_json(), keyExpiry=86400, usePrefix=True, prefixHostname=self.hostname, prefixServiceName='diameter'))
 
                 await(asyncio.sleep(1))
@@ -177,7 +180,7 @@ class DiameterService:
         Logs the number of active connections on a rolling basis.
         """
         try:
-            activePeers = self.activePeers
+            activePeers = dict(self.activePeers)
             if not len(activePeers) > 0:
                 activePeers = ''
 
@@ -241,10 +244,15 @@ class DiameterService:
     async def readInboundData(self, reader, clientAddress: str, clientPort: str, socketTimeout: int, coroutineUuid: str) -> bool:
         """
         Reads incoming data from a connected client. Data is sent to a shared memory-based queue, to be polled and processed by a worker coroutine.
-        Terminates the connection if the client disconnects, the queue fills or another exception occurs.
+        Each queue entry holds one complete Diameter message.
+        Terminates the connection if the client disconnects, the queue fills, a Diameter header is invalid or another exception occurs.
         """
         await(self.logTool.logAsync(service='Diameter', level='debug', message=f"[Diameter] [readInboundData] [{coroutineUuid}] New connection from {clientAddress} on port {clientPort}"))
         clientConnection = f"{clientAddress}-{clientPort}"
+        # TCP is a byte stream: a read can end inside a Diameter message, or hold several.
+        # Keep the unconsumed bytes per connection and queue only complete messages,
+        # framed by the 3-byte Message Length in the Diameter header (RFC 6733 section 3).
+        streamBuffer = bytearray()
         while True:
             try:
 
@@ -253,13 +261,22 @@ class DiameterService:
                 if reader.at_eof():
                     return False
 
-                if len(inboundData) > 0:
-                    inboundData = InboundData(SenderIp=clientAddress,
-                                              SenderPort=clientPort,
-                                              InitialReceiveTimestamp=time.time_ns(),
-                                              InboundHex=inboundData.hex())
-                    
-                    self.sharedQueue.put_nowait(inboundData)
+                streamBuffer += inboundData
+                while len(streamBuffer) >= 20:
+                    messageLength = int.from_bytes(streamBuffer[1:4], 'big')
+                    if streamBuffer[0] != 1 or messageLength < 20:
+                        await(self.logTool.logAsync(service='Diameter', level='warning', message=f"[Diameter] [readInboundData] [{coroutineUuid}] Invalid Diameter header from {clientAddress} on port {clientPort} (version {streamBuffer[0]}, length {messageLength}), closing connection."))
+                        return False
+                    if len(streamBuffer) < messageLength:
+                        break
+                    diameterMessage = bytes(streamBuffer[:messageLength])
+                    del streamBuffer[:messageLength]
+                    inboundMessage = InboundData(SenderIp=clientAddress,
+                                                 SenderPort=clientPort,
+                                                 InitialReceiveTimestamp=time.time_ns(),
+                                                 InboundHex=diameterMessage.hex())
+
+                    self.sharedQueue.put_nowait(inboundMessage)
 
             except Exception as e:
                 await(self.logTool.logAsync(service='Diameter', level='info', message=f"[Diameter] [readInboundData] [{coroutineUuid}] Socket Exception for {clientAddress} on port {clientPort}, closing connection.\n{e}"))

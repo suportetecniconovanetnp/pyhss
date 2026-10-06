@@ -5,6 +5,13 @@ All notable changes to PyHSS are documented in this file, beginning from [Servic
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Fix `RuntimeError: dictionary changed size during iteration` in the diameter service when peers connect or disconnect while `activePeers` is being iterated ([#310](https://github.com/nickvsnetworking/pyhss/issues/310)).
+- Fix Diameter requests that were lost when a message was split across TCP reads: the diameter service now queues only complete messages, framed by the Message Length in the Diameter header ([#341](https://github.com/nickvsnetworking/pyhss/pull/341)).
+
 ## [2.0.0] - 2026-08-17
 
 ### Added

@@ -14,6 +14,11 @@ import pydantic_core
 from pyhss_config import config
 
 
+# Capabilities-Exchange, Device-Watchdog and Disconnect-Peer are cheap, and answering them late still keeps
+# the peer connection alive, so they are never dropped for being old.
+STALE_EXEMPT_COMMAND_CODES = frozenset({257, 280, 282})
+
+
 class HssService:
     
     def __init__(self):
@@ -50,6 +55,9 @@ class HssService:
         self.peerCacheInterval = int(config.get('hss', {}).get('peer_cache_interval', 5))
         self.peerCache = {}
         self.lastPeerCacheRefresh = 0.0
+        # Requests older than this have usually been given up on by the peer already, so answering them only
+        # costs processing time. 0 disables the check.
+        self.maxInboundMessageAge = float(config.get('hss', {}).get('max_inbound_message_age', 10))
         self.housekeepingStop = threading.Event()
         self.housekeepingPollInterval = 1.0
 
@@ -114,6 +122,27 @@ class HssService:
         except Exception as e:
             self.logTool.log(service='HSS', level='error', message=f"[HSS] [generatePromStats] Exception: {traceback.format_exc()}", redisClient=self.redisMessaging)
 
+    def isStaleRequest(self, inboundData: InboundData, bufferedDiameterMessage: str) -> bool:
+        """
+        Whether a message has waited longer than maxInboundMessageAge since the diameter service received it.
+
+        The inbound Redis queue only expires when nothing is pushed to it for diameter_request_timeout, so
+        during a burst (for example every UE re-attaching after an open5gs restart) its backlog never
+        expires. Without this check the HSS spends its time answering requests the peers have long since
+        retried, which keeps the backlog growing.
+        """
+        if self.maxInboundMessageAge <= 0:
+            return False
+        age = (time.time_ns() - inboundData.InitialReceiveTimestamp) / 1e9
+        if age <= self.maxInboundMessageAge:
+            return False
+        try:
+            # Diameter header: version (1 byte), message length (3), flags (1), command code (3)
+            commandCode = int(bufferedDiameterMessage[10:16], 16)
+        except ValueError:
+            return False
+        return commandCode not in STALE_EXEMPT_COMMAND_CODES
+
     def handleHousekeeping(self) -> None:
         """
         Runs the periodic housekeeping tasks until housekeepingStop is set.
@@ -145,8 +174,15 @@ class HssService:
 
                 inboundMessageList = self.redisMessaging.awaitBulkMessage(key='diameter-inbound', usePrefix=True, prefixHostname=self.hostname, prefixServiceName='diameter')
 
-                if inboundMessageList == None:
+                if not inboundMessageList:
+                    # awaitBulkMessage() blocks until a message arrives, and returns '' straight away when Redis
+                    # cannot be reached. Back off, so an outage doesn't turn this loop into a busy loop.
+                    if inboundMessageList == '':
+                        time.sleep(1)
                     continue
+
+                staleMessagesDropped = 0
+                oldestStaleAge = 0.0
                 for inboundMessage in inboundMessageList[1]:
                     self.logTool.log(service='HSS', level='debug', message=f"[HSS] [handleQueue] Message: {inboundMessage}", redisClient=self.redisMessaging)
                     inboundMessage = inboundMessage.decode('ascii')
@@ -161,6 +197,11 @@ class HssService:
                     messageNumber = 1
 
                     for buffered_diameter_message in buffered_diameter_messages:
+                        if self.isStaleRequest(inboundData, buffered_diameter_message):
+                            staleMessagesDropped += 1
+                            oldestStaleAge = max(oldestStaleAge, (time.time_ns() - inboundData.InitialReceiveTimestamp) / 1e9)
+                            continue
+
                         self.logTool.log(service='HSS', level='debug', message=f"[HSS] [handleQueue] Processing message ({messageNumber} of {len(buffered_diameter_messages)}): {buffered_diameter_message}", redisClient=self.redisMessaging)
 
                         try:
@@ -232,6 +273,15 @@ class HssService:
                         except Exception as e:
                             self.logTool.log(service='HSS', level='error', message=f"[HSS] [handleQueue] Error updating prom_diam_response_count_host: {traceback.format_exc()}", redisClient=self.redisMessaging)
                             pass
+
+                if staleMessagesDropped:
+                    self.logTool.log(service='HSS', level='warning', message=f"[HSS] [handleQueue] Dropped {staleMessagesDropped} diameter message(s) that waited more than {self.maxInboundMessageAge}s in the queue (oldest: {round(oldestStaleAge, 1)}s). The HSS is not keeping up with the request rate.", redisClient=self.redisMessaging)
+                    self.redisMessaging.sendMetric(serviceName='diameter', metricName='prom_diam_stale_request_dropped',
+                                                   metricType='counter', metricAction='inc',
+                                                   metricValue=float(staleMessagesDropped), metricHelp='Number of Diameter Requests dropped for waiting too long in the queue',
+                                                   metricExpiry=60,
+                                                   usePrefix=False,
+                                                   prefixServiceName='metric')
 
             except Exception as e:
                 self.logTool.log(service='HSS', level='error', message=f"[HSS] [handleQueue] Exception: {traceback.format_exc()}", redisClient=self.redisMessaging)

@@ -32,6 +32,10 @@ hss:
   #The maximum time to wait, in seconds, before discarding a diameter request.
   diameter_request_timeout: ${HSS_DIAMETER_REQUEST_TIMEOUT:-3}
 
+  # Requests that waited longer than this many seconds in the queue before the HSS got to them are dropped
+  # unanswered, as the peer has normally given up on them already. 0 disables. CER, DWR and DPR are never dropped.
+  max_inbound_message_age: ${HSS_MAX_INBOUND_MESSAGE_AGE:-10}
+
   # Whether to send a DWR to connected peers.
   send_dwr: ${HSS_SEND_DWR:-False}
 

@@ -35,6 +35,7 @@ def _service():
     service.diameterLibrary = Mock()
     service.benchmarking = False
     service.hostname = "hss01"
+    service.maxInboundMessageAge = 10.0
     service.emergencySubscriberCleanupInterval = 60
     service.lastEmergencySubscriberCleanup = 0.0
     service.promStatsInterval = 60
@@ -59,7 +60,7 @@ def test_handle_queue_does_not_run_housekeeping():
     service.clearExpiredEmergencySubscribers = Mock()
     service.generatePromStats = Mock()
 
-    inbound = InboundData(SenderIp="127.0.0.1", SenderPort="1234", InitialReceiveTimestamp=1, InboundHex="aa")
+    inbound = InboundData(SenderIp="127.0.0.1", SenderPort="1234", InitialReceiveTimestamp=time.time_ns(), InboundHex="aa")
     service.redisMessaging.awaitBulkMessage.side_effect = [(b"key", [inbound.model_dump_json().encode()]), _StopLoop()]
     service.diameterLibrary.split_diameter_message.return_value = ["aa"]
     service.diameterLibrary.generateDiameterResponse.return_value = "bb"
@@ -123,7 +124,7 @@ def test_slow_housekeeping_does_not_block_the_request_loop():
     try:
         assert _wait_for(lambda: service.diameterLibrary.Generate_Prom_Stats.called)
 
-        inbound = InboundData(SenderIp="127.0.0.1", SenderPort="1234", InitialReceiveTimestamp=1, InboundHex="aa")
+        inbound = InboundData(SenderIp="127.0.0.1", SenderPort="1234", InitialReceiveTimestamp=time.time_ns(), InboundHex="aa")
         service.redisMessaging.awaitBulkMessage.side_effect = [(b"key", [inbound.model_dump_json().encode()]), _StopLoop()]
         service.diameterLibrary.split_diameter_message.return_value = ["aa"]
         service.diameterLibrary.generateDiameterResponse.return_value = "bb"

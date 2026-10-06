@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fix `RuntimeError: dictionary changed size during iteration` in the diameter service when peers connect or disconnect while `activePeers` is being iterated ([#310](https://github.com/nickvsnetworking/pyhss/issues/310)).
 - Fix Diameter requests that were lost when a message was split across TCP reads: the diameter service now queues only complete messages, framed by the Message Length in the Diameter header ([#341](https://github.com/nickvsnetworking/pyhss/pull/341)).
+- Run the periodic emergency-subscriber cleanup and Prometheus subscriber-count stats in a separate thread in `hssService`, instead of inline between diameter batches. Each run scanned whole tables for several seconds once a minute, during which every request (including Device-Watchdog) waited or was dropped.
 
 ## [2.0.0] - 2026-08-17
 

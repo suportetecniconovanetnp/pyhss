@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright 2023-2025 David Kneipp <david@davidkneipp.com>
 # SPDX-License-Identifier: AGPL-3.0-or-later
-import os, sys, json, time, traceback, socket
+import os, sys, json, time, traceback, socket, threading
 
 sys.path.append(os.path.realpath(os.path.dirname(__file__) + "/../lib"))
 
@@ -50,6 +50,8 @@ class HssService:
         self.peerCacheInterval = int(config.get('hss', {}).get('peer_cache_interval', 5))
         self.peerCache = {}
         self.lastPeerCacheRefresh = 0.0
+        self.housekeepingStop = threading.Event()
+        self.housekeepingPollInterval = 1.0
 
     def getPeerHostname(self, senderIp: str, senderPort: str):
         """
@@ -111,6 +113,26 @@ class HssService:
             self.diameterLibrary.Generate_Prom_Stats()
         except Exception as e:
             self.logTool.log(service='HSS', level='error', message=f"[HSS] [generatePromStats] Exception: {traceback.format_exc()}", redisClient=self.redisMessaging)
+
+    def handleHousekeeping(self) -> None:
+        """
+        Runs the periodic housekeeping tasks until housekeepingStop is set.
+
+        These tasks scan whole tables, which took several seconds on a busy database. Run inline
+        in handleQueue() they froze the single request-processing loop for that long, so every
+        diameter message (including DWR/DWA) that arrived in the meantime waited, or was dropped
+        when its Redis queue expired. They run here, in their own thread, so handleQueue() only
+        ever processes diameter messages. Each task is still gated by its own interval.
+        """
+        while not self.housekeepingStop.is_set():
+            self.clearExpiredEmergencySubscribers()
+            self.generatePromStats()
+            self.housekeepingStop.wait(self.housekeepingPollInterval)
+
+    def startHousekeeping(self) -> threading.Thread:
+        housekeepingThread = threading.Thread(target=self.handleHousekeeping, name='hssHousekeeping', daemon=True)
+        housekeepingThread.start()
+        return housekeepingThread
 
     def handleQueue(self):
         """
@@ -211,11 +233,6 @@ class HssService:
                             self.logTool.log(service='HSS', level='error', message=f"[HSS] [handleQueue] Error updating prom_diam_response_count_host: {traceback.format_exc()}", redisClient=self.redisMessaging)
                             pass
 
-                # Periodic housekeeping, once per batch at most, after the
-                # responses for this batch have already been queued.
-                self.clearExpiredEmergencySubscribers()
-                self.generatePromStats()
-
             except Exception as e:
                 self.logTool.log(service='HSS', level='error', message=f"[HSS] [handleQueue] Exception: {traceback.format_exc()}", redisClient=self.redisMessaging)
                 continue
@@ -223,6 +240,7 @@ class HssService:
 
 def main():
     hssService = HssService()
+    hssService.startHousekeeping()
     hssService.handleQueue()
 
 
